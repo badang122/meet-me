@@ -2451,16 +2451,19 @@ function renderStage() {
     const selfVid = document.getElementById('selfTileVideo');
     if (selfVid && !selfVid.srcObject) selfVid.srcObject = state.localStream;
   }
-  // Attach screen stream: local from state.screenStream, remote from
-  // the peer's main RT.remoteStreams entry (we swapped tracks in-place).
+  // Attach screen stream:
+  //  - local: state.screenStream
+  //  - LiveKit remote: RT.remoteScreens (separate stream, screen-only)
+  //  - PeerJS remote (replaceTrack pattern): RT.remoteStreams (main stream
+  //    has been swapped to screen content in place)
   const sv = document.getElementById('screenVideo');
   if (sv) {
     const src = sv.dataset.screenSource;
     if (src === 'self' && state.screenStream) {
       if (sv.srcObject !== state.screenStream) sv.srcObject = state.screenStream;
-    } else if (src && src !== 'self' && RT.remoteStreams.has(src)) {
-      const rs = RT.remoteStreams.get(src);
-      if (sv.srcObject !== rs) sv.srcObject = rs;
+    } else if (src && src !== 'self') {
+      const rs = RT.remoteScreens.get(src) || RT.remoteStreams.get(src);
+      if (rs && sv.srcObject !== rs) sv.srcObject = rs;
     }
   }
   // Attach real remote streams to peer video tiles
@@ -3719,11 +3722,15 @@ function rtRefreshParticipants() {
   };
   const palette = ['#4f46e5', '#db2777', '#0891b2', '#f59e0b', '#10b981', '#8b5cf6', '#ef4444'];
   let i = 0;
-  // Include any peer we have EITHER a data connection OR a media call with.
-  // This makes the participant show up as soon as the data channel opens,
-  // even before media negotiation finishes (otherwise the peer stays
-  // invisible for the first few seconds and looks broken).
-  const peerIds = new Set([...RT.calls.keys(), ...RT.conns.keys()]);
+  // Source the peer list from whichever backend is active.
+  // - LiveKit (SFU): from LK.participants (populated by ParticipantConnected).
+  // - PeerJS mesh: from RT.calls / RT.conns (data conn open or media call up).
+  let peerIds;
+  if (LK.active) {
+    peerIds = new Set(LK.participants.keys());
+  } else {
+    peerIds = new Set([...RT.calls.keys(), ...RT.conns.keys()]);
+  }
   const others = Array.from(peerIds).map(id => {
     const meta = RT.remoteMeta.get(id) || {};
     return {
@@ -3976,26 +3983,33 @@ function lkOnTrackSubscribed(track, publication, participant) {
   entry.tracks.set(publication.trackSid, track);
   LK.participants.set(id, entry);
 
-  // Build a MediaStream containing all the participant's currently-subscribed
-  // tracks so the existing render code (which expects RT.remoteStreams to be
-  // a MediaStream per peer) keeps working unchanged.
-  const stream = RT.remoteStreams.get(id) || new MediaStream();
-  if (track.mediaStreamTrack) {
-    try { stream.addTrack(track.mediaStreamTrack); } catch {}
-  }
-  RT.remoteStreams.set(id, stream);
+  const isScreen = publication.source === LivekitClient.Track.Source.ScreenShare
+                 || publication.source === LivekitClient.Track.Source.ScreenShareAudio;
 
-  if (track.kind === 'audio') {
-    attachRemoteAudio(id, stream);
-  }
-  // For screen-share tracks: LiveKit identifies them via track.source === 'screen_share'
-  if (publication.source === LivekitClient.Track.Source.ScreenShare) {
-    RT.remoteScreens.set(id, stream);
+  if (isScreen) {
+    // Screen share goes in its own stream — separate from camera+mic.
+    const screenStream = RT.remoteScreens.get(id) || new MediaStream();
+    if (track.mediaStreamTrack) {
+      try { screenStream.addTrack(track.mediaStreamTrack); } catch {}
+    }
+    RT.remoteScreens.set(id, screenStream);
     const meta = RT.remoteMeta.get(id) || {};
     meta.screening = true;
-    meta.screenHasAudio = publication.source === LivekitClient.Track.Source.ScreenShareAudio;
+    if (publication.source === LivekitClient.Track.Source.ScreenShareAudio) {
+      meta.screenHasAudio = true;
+      attachRemoteAudio(`screen:${id}`, screenStream);
+    }
     RT.remoteMeta.set(id, meta);
+  } else {
+    // Camera or microphone track — goes in the main per-peer stream.
+    const stream = RT.remoteStreams.get(id) || new MediaStream();
+    if (track.mediaStreamTrack) {
+      try { stream.addTrack(track.mediaStreamTrack); } catch {}
+    }
+    RT.remoteStreams.set(id, stream);
+    if (track.kind === 'audio') attachRemoteAudio(id, stream);
   }
+
   rtRefreshParticipants();
   renderStage();
 }
