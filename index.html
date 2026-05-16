@@ -1394,11 +1394,46 @@ input, textarea, select { font-family: inherit; color: inherit; }
 }
 @media (max-width: 700px) {
   .home-pitch h1 { font-size: 30px; }
-  .meet-bottom { height: 72px; padding: 0 8px; }
+  .meet-bottom {
+    height: 72px;
+    padding: 0 8px;
+    /* Make sure the bottom bar sits above any iOS safari home indicator */
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
   .meet-bottom .left, .meet-bottom .right { display: none; }
-  .meet-bottom .center { width: 100%; justify-content: center; gap: 6px; flex-wrap: wrap; }
-  .ctrl { width: 44px; height: 44px; }
-  .ctrl.leave { padding: 0 18px; }
+  .meet-bottom .center {
+    width: 100%;
+    justify-content: center;
+    gap: 6px;
+    flex-wrap: nowrap;       /* keep on one row so Leave never wraps off */
+    overflow-x: auto;        /* allow horizontal scroll if too crowded */
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    padding: 0 4px;
+  }
+  .meet-bottom .center::-webkit-scrollbar { display: none; }
+  .ctrl { width: 44px; height: 44px; flex-shrink: 0; }
+  .ctrl svg { width: 19px; height: 19px; }
+  .ctrl.leave {
+    flex-shrink: 0;
+    padding: 0 18px;
+    height: 44px;
+    font-size: 13px;
+    /* Make Leave sticky-visible: it's always at the end of the scroll
+       region, never hidden behind a label that wraps. */
+    position: sticky;
+    right: 4px;
+    box-shadow: 0 0 12px rgba(234, 67, 53, 0.35);
+  }
+  .ctrl-label { display: none; }
+}
+
+@media (max-width: 480px) {
+  /* On very narrow screens, hide secondary controls so the essentials
+     (mic, camera, share, more, leave) never get squeezed off-screen.
+     Captions / reactions / hand-raise are still reachable from the More menu. */
+  #ctrlCaptions, #ctrlReact, #ctrlHand { display: none; }
 }
 </style>
 </head>
@@ -1619,6 +1654,14 @@ input, textarea, select { font-family: inherit; color: inherit; }
     <div class="item" data-more="captions">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M7 15h4M13 15h4M7 11h4M13 11h4"/></svg>
       Turn on captions
+    </div>
+    <div class="item" data-more="react-menu">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+      Send a reaction
+    </div>
+    <div class="item" data-more="hand">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"/><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>
+      Raise / lower hand
     </div>
     <div class="item" data-more="monitor" id="monitorItem">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
@@ -2732,6 +2775,11 @@ moreMenu.querySelectorAll('[data-more]').forEach(it => {
       toast('Background effects (demo)');
     } else if (k === 'captions') {
       toggleCaptions();
+    } else if (k === 'react-menu') {
+      // Open the reactions bar (mobile shortcut, when ctrlReact is hidden)
+      document.getElementById('reactionsBar').classList.add('show');
+    } else if (k === 'hand') {
+      document.getElementById('ctrlHand').click();
     } else if (k === 'monitor') {
       if (!state.screenStream) { toast('Start screen share with audio first.'); return; }
       if (!state.screenHasAudio) { toast('No audio in the share. Pick a Chrome tab + check "Share tab audio".'); return; }
@@ -3309,8 +3357,9 @@ function rtJoinAsClient(hostId, localStream) {
       RT.conns.set(hostId, conn);
       conn.on('open', () => {
         try { conn.send({ type: 'hello', meta: rtLocalMeta() }); } catch {}
-        // Joiner always initiates the media call to host. Mirror of the
-        // canonical PeerJS pattern from their docs.
+        rtRefreshParticipants();
+        renderStage();
+        // Joiner always initiates the media call to host.
         rtPlaceMainCall(hostId);
       });
       conn.on('data', (msg) => rtHandleData(hostId, msg));
@@ -3546,7 +3595,12 @@ function rtRefreshParticipants() {
   };
   const palette = ['#4f46e5', '#db2777', '#0891b2', '#f59e0b', '#10b981', '#8b5cf6', '#ef4444'];
   let i = 0;
-  const others = Array.from(RT.calls.keys()).map(id => {
+  // Include any peer we have EITHER a data connection OR a media call with.
+  // This makes the participant show up as soon as the data channel opens,
+  // even before media negotiation finishes (otherwise the peer stays
+  // invisible for the first few seconds and looks broken).
+  const peerIds = new Set([...RT.calls.keys(), ...RT.conns.keys()]);
+  const others = Array.from(peerIds).map(id => {
     const meta = RT.remoteMeta.get(id) || {};
     return {
       id,
