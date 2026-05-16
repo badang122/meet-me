@@ -1384,7 +1384,7 @@ input, textarea, select { font-family: inherit; color: inherit; }
 
 /* ============== Responsive ============== */
 @media (max-width: 1000px) {
-  .home-body, .lobby-body { grid-template-columns: 1fr; padding: 20px 24px 40px; gap: 28px; }
+  .home-body, .lobby-body { grid-template-columns: 1fr; padding: 20px 24px 40px; gap: 20px; }
   .home-illust { order: -1; }
   .illust-frame { max-width: 320px; }
   .home-pitch h1 { font-size: 36px; }
@@ -1392,6 +1392,17 @@ input, textarea, select { font-family: inherit; color: inherit; }
   .side-panel { left: 8px; right: 8px; top: auto; bottom: 88px; height: 60vh; width: auto; }
   .self-pip { width: 140px; }
   .self-pip.with-panel { right: 16px; }
+
+  /* Lobby — make sure Join now button is reachable on small/short screens */
+  #view-lobby { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .lobby-body { align-items: start; padding-bottom: 60px; }
+  .video-preview { aspect-ratio: 16/9; max-height: 38vh; }
+  .lobby-info .ready { font-size: 20px; }
+  .lobby-info .lobby-actions { position: sticky; bottom: 0; background: var(--bg); padding: 12px 0; z-index: 2; }
+  .btn-join-big { padding: 14px 28px; font-size: 16px; width: 100%; max-width: 360px; }
+  .share-box { margin-top: 18px; padding: 14px; }
+  .share-box-row { flex-direction: column; gap: 8px; }
+  .share-copy { padding: 10px; justify-content: center; }
 }
 @media (max-width: 700px) {
   .home-pitch h1 { font-size: 30px; }
