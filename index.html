@@ -2144,16 +2144,19 @@ async function joinMeeting() {
 
 function renderStage() {
   const stage = document.getElementById('stage');
-  // Determine active screen share: prefer self, else first remote screen
+  // Determine active screen share: local takes precedence, else find a remote
+  // participant whose meta says they're presenting.
   let screen = null;
   let remoteScreenPeerId = null;
   if (state.screenStream) {
     screen = { presenter: state.user.name || 'You', isSelf: true, hasAudio: state.screenHasAudio };
-  } else if (RT.remoteScreens.size > 0) {
-    remoteScreenPeerId = RT.remoteScreens.keys().next().value;
-    const meta = RT.remoteMeta.get(remoteScreenPeerId) || {};
-    const screenStream = RT.remoteScreens.get(remoteScreenPeerId);
-    screen = { presenter: meta.name || 'Guest', isSelf: false, hasAudio: !!screenStream.getAudioTracks().length, peerId: remoteScreenPeerId };
+  } else {
+    const sharingPeer = state.participants.find(p => !p.isSelf && p.screening);
+    if (sharingPeer) {
+      remoteScreenPeerId = sharingPeer.id;
+      const meta = RT.remoteMeta.get(sharingPeer.id) || {};
+      screen = { presenter: meta.name || 'Guest', isSelf: false, hasAudio: !!meta.screenHasAudio, peerId: sharingPeer.id };
+    }
   }
   const others = state.participants.filter(p => !p.isSelf);
   const me = state.participants.find(p => p.isSelf);
@@ -2166,7 +2169,9 @@ function renderStage() {
     state.participants.filter(p => p.id !== state.pinned).forEach(p => tiles.push({ kind: 'p', p }));
   } else if (screen) {
     tiles.push({ kind: 'screen', screen });
-    others.forEach(p => tiles.push({ kind: 'p', p }));
+    // When a remote peer is sharing, skip their participant tile — their
+    // stream is already shown in the big screen tile.
+    others.forEach(p => { if (p.id !== remoteScreenPeerId) tiles.push({ kind: 'p', p }); });
     tiles.push({ kind: 'p', p: me });
   } else {
     // Auto: include self in grid only if 5+ total; otherwise self pip
@@ -2255,8 +2260,10 @@ function renderStage() {
     const src = sv.dataset.screenSource;
     if (src === 'self' && state.screenStream) {
       if (sv.srcObject !== state.screenStream) sv.srcObject = state.screenStream;
-    } else if (src && src !== 'self' && RT.remoteScreens.has(src)) {
-      const rs = RT.remoteScreens.get(src);
+    } else if (src && src !== 'self' && RT.remoteStreams.has(src)) {
+      // Remote sharer's main stream contains the screen video (tracks were
+      // swapped on their side via replaceTrack — same MediaStream identity).
+      const rs = RT.remoteStreams.get(src);
       if (sv.srcObject !== rs) sv.srcObject = rs;
     }
   }
@@ -3010,6 +3017,24 @@ function rtLocalMeta() {
   };
 }
 
+// The stream we send to peers right now. If we're presenting, this is a
+// stream with screen video (+ tab audio if shared, else our mic). Otherwise
+// it's our camera+mic.
+function rtOutboundStream() {
+  if (!state.screenStream) return state.localStream;
+  const tracks = [];
+  const sv = state.screenStream.getVideoTracks()[0];
+  if (sv) tracks.push(sv);
+  const sa = state.screenStream.getAudioTracks()[0];
+  if (sa) {
+    tracks.push(sa);
+  } else if (state.localStream) {
+    const mic = state.localStream.getAudioTracks()[0];
+    if (mic) tracks.push(mic);
+  }
+  return tracks.length ? new MediaStream(tracks) : null;
+}
+
 // ICE servers used for all WebRTC connections. Google STUN is good enough for
 // peers on the same NAT, but ~20% of network pairs need TURN to traverse
 // strict NAT/firewalls — without it, screen share or video often arrives blank.
@@ -3087,14 +3112,10 @@ function rtJoinAsClient(hostId, localStream) {
       const conn = peer.connect(hostId, { reliable: true, metadata: { meta: rtLocalMeta() } });
       RT.conns.set(hostId, conn);
       conn.on('open', () => {
+        // Just announce ourselves. The host's on('connection') handler will
+        // call US back with their stream — we don't initiate the media call.
+        // This avoids races where both sides create duplicate PeerConnections.
         try { conn.send({ type: 'hello', meta: rtLocalMeta() }); } catch {}
-        if (state.localStream) {
-          try {
-            const call = peer.call(hostId, state.localStream, { metadata: { kind: 'main', meta: rtLocalMeta() } });
-            RT.calls.set(hostId, call);
-            rtWireCall(call, hostId);
-          } catch (e) { console.warn('[RT] call to host failed', e); }
-        }
       });
       conn.on('data', (msg) => rtHandleData(hostId, msg));
       conn.on('close', () => rtHandlePeerLeft(hostId));
@@ -3128,21 +3149,13 @@ function rtSetupHandlers(localStream) {
         const list = others.map(pid => ({ id: pid, meta: RT.remoteMeta.get(pid) || null }));
         conn.send({ type: 'peer-list', peers: list });
       }
-      // If we're currently presenting, also screen-share to this new peer
-      // so they immediately see our shared content (otherwise they'd join blind).
-      if (state.screenStream && !RT.screenCalls.has(id)) {
+      // Proactively call this new peer with our current outbound stream
+      // (screen tracks if we're presenting; otherwise camera+mic). Track
+      // swaps handle the transition when sharing starts/stops later.
+      const out = rtOutboundStream();
+      if (out && !RT.calls.has(id)) {
         try {
-          const call = RT.peer.call(id, state.screenStream, { metadata: { kind: 'screen' } });
-          RT.screenCalls.set(id, call);
-          rtWireCall(call, id);
-          console.info('[RT] screen-sharing to new peer', id);
-        } catch (e) { console.warn('[RT] screen call to new peer failed', id, e); }
-      }
-      // Also place a regular media call (camera+mic) to this new peer so they
-      // can see/hear us without waiting for them to call us.
-      if (state.localStream && !RT.calls.has(id)) {
-        try {
-          const call = RT.peer.call(id, state.localStream, { metadata: { kind: 'main', meta: rtLocalMeta() } });
+          const call = RT.peer.call(id, out, { metadata: { kind: 'main', meta: rtLocalMeta() } });
           RT.calls.set(id, call);
           rtWireCall(call, id);
         } catch (e) { console.warn('[RT] media call to new peer failed', id, e); }
@@ -3152,22 +3165,11 @@ function rtSetupHandlers(localStream) {
     conn.on('close', () => rtHandlePeerLeft(id));
     conn.on('error', (e) => console.warn('[RT] conn error', id, e));
   });
-  // Incoming media call
+  // Incoming media call — always our outbound stream as the answer
   RT.peer.on('call', (call) => {
     const id = call.peer;
-    const kind = call.metadata?.kind || 'main';
-    // Screen-share calls are one-way: the sender is presenting, we just
-    // receive. Answering without a stream avoids sending our camera back
-    // through the screen connection (saves bandwidth + cleaner negotiation).
-    if (kind === 'screen') {
-      call.answer();
-      RT.screenCalls.set(id, call);
-      const senderName = (RT.remoteMeta.get(id) || {}).name || 'Someone';
-      toast(`${senderName} is presenting their screen`);
-    } else {
-      call.answer(state.localStream || undefined);
-      RT.calls.set(id, call);
-    }
+    call.answer(rtOutboundStream() || undefined);
+    RT.calls.set(id, call);
     rtWireCall(call, id);
   });
   RT.peer.on('disconnected', () => {
@@ -3181,13 +3183,11 @@ function rtSetupHandlers(localStream) {
 
 function rtWireCall(call, peerId) {
   call.on('stream', (stream) => {
-    if (call.metadata?.kind === 'screen') {
-      RT.remoteScreens.set(peerId, stream);
-      attachRemoteAudio(`screen:${peerId}`, stream);
-    } else {
-      RT.remoteStreams.set(peerId, stream);
-      attachRemoteAudio(peerId, stream);
-    }
+    // Single MediaConnection per peer — its content (camera or screen) is
+    // swapped via replaceTrack on the sender side. The MediaStream identity
+    // stays the same on the receiver, so the tile auto-updates.
+    RT.remoteStreams.set(peerId, stream);
+    attachRemoteAudio(peerId, stream);
     rtRefreshParticipants();
     renderStage();
   });
@@ -3196,11 +3196,6 @@ function rtWireCall(call, peerId) {
       RT.calls.delete(peerId);
       RT.remoteStreams.delete(peerId);
       detachRemoteAudio(peerId);
-    }
-    if (RT.screenCalls.get(peerId) === call) {
-      RT.screenCalls.delete(peerId);
-      RT.remoteScreens.delete(peerId);
-      detachRemoteAudio(`screen:${peerId}`);
     }
     rtRefreshParticipants();
     renderStage();
@@ -3218,7 +3213,8 @@ function rtHandleData(peerId, msg) {
       renderStage();
       break;
     case 'peer-list':
-      // I'm a joiner; connect to every other peer in the list (mesh)
+      // I'm a joiner; open data conns to every other peer in the list. They
+      // will call ME back from their on('connection') handler.
       (msg.peers || []).forEach(({ id, meta }) => {
         if (id === RT.peer.id) return;
         if (RT.conns.has(id)) return;
@@ -3228,11 +3224,6 @@ function rtHandleData(peerId, msg) {
         conn.on('data', (m) => rtHandleData(id, m));
         conn.on('close', () => rtHandlePeerLeft(id));
         conn.on('error', (e) => console.warn('[RT] conn err', id, e));
-        if (state.localStream) {
-          const call = RT.peer.call(id, state.localStream, { metadata: { kind: 'main', meta: rtLocalMeta() } });
-          RT.calls.set(id, call);
-          rtWireCall(call, id);
-        }
         if (meta) RT.remoteMeta.set(id, meta);
       });
       rtRefreshParticipants();
@@ -3253,14 +3244,19 @@ function rtHandleData(peerId, msg) {
       if (msg.up) toast(`✋ ${meta.name || 'Someone'} raised a hand`);
       break;
     }
-    case 'screen-start':
-      // Peer is about to start sharing — they'll call us with kind:'screen'
-      break;
-    case 'screen-stop': {
-      RT.remoteScreens.delete(peerId);
-      const c = RT.screenCalls.get(peerId);
-      if (c) { try { c.close(); } catch {} RT.screenCalls.delete(peerId); }
+    case 'screen-state': {
+      // Sender's main stream just swapped to (or back from) screen content.
+      // Update meta so we render the "Sharing screen" badge correctly.
+      const meta = RT.remoteMeta.get(peerId) || {};
+      meta.screening = !!msg.sharing;
+      meta.screenHasAudio = !!msg.hasAudio;
+      RT.remoteMeta.set(peerId, meta);
+      rtRefreshParticipants();
       renderStage();
+      if (msg.sharing) {
+        const who = meta.name || 'Someone';
+        toast(`${who} is presenting their screen`);
+      }
       break;
     }
   }
@@ -3306,6 +3302,7 @@ function rtRefreshParticipants() {
       camOn: meta.camOn !== false,
       speaking: false,
       hand: !!meta.hand,
+      screening: !!meta.screening,
       isSelf: false,
     };
   });
@@ -3320,22 +3317,52 @@ function rtBroadcast(msg) {
 
 function rtBroadcastMeta() { rtBroadcast({ type: 'meta', meta: rtLocalMeta() }); }
 
-async function rtStartScreenShareToAll(screenStream) {
-  rtBroadcast({ type: 'screen-start' });
-  RT.conns.forEach((_, peerId) => {
-    if (RT.screenCalls.has(peerId)) return;
+// Replace the video (and optionally audio) tracks in every established main
+// peer connection with the screen-share tracks. This reuses the already-
+// negotiated RTCPeerConnections — no new ICE / signaling needed. The remote
+// peer sees the screen content on the same tile that used to show our camera.
+// Pattern used by Google Meet, Zoom, Discord, etc. — far more reliable than
+// opening a second MediaConnection (which often fails through strict NATs).
+function rtStartScreenShareToAll(screenStream) {
+  const screenVideo = screenStream.getVideoTracks()[0];
+  const screenAudio = screenStream.getAudioTracks()[0]; // may be undefined
+  let swappedPeers = 0;
+  RT.calls.forEach((call, peerId) => {
     try {
-      const call = RT.peer.call(peerId, screenStream, { metadata: { kind: 'screen' } });
-      RT.screenCalls.set(peerId, call);
-      rtWireCall(call, peerId);
-    } catch (e) { console.warn('[RT] screen call failed', peerId, e); }
+      const senders = call.peerConnection.getSenders();
+      const vSender = senders.find(s => s.track && s.track.kind === 'video');
+      if (vSender && screenVideo) vSender.replaceTrack(screenVideo).catch((e) => console.warn('[RT] video swap failed', peerId, e));
+      if (screenAudio) {
+        const aSender = senders.find(s => s.track && s.track.kind === 'audio');
+        if (aSender) aSender.replaceTrack(screenAudio).catch((e) => console.warn('[RT] audio swap failed', peerId, e));
+      }
+      swappedPeers++;
+    } catch (e) { console.warn('[RT] track swap failed for', peerId, e); }
   });
+  console.info('[RT] screen-share track swap', { peers: swappedPeers, hasAudio: !!screenAudio });
+  rtBroadcast({ type: 'screen-state', sharing: true, hasAudio: !!screenAudio });
+  rtBroadcastMeta();
 }
 
+// Swap tracks back to the original camera + mic when the user stops sharing.
 function rtStopScreenShareToAll() {
-  RT.screenCalls.forEach(c => { try { c.close(); } catch {} });
-  RT.screenCalls.clear();
-  rtBroadcast({ type: 'screen-stop' });
+  if (!state.localStream) {
+    rtBroadcast({ type: 'screen-state', sharing: false });
+    return;
+  }
+  const camTrack = state.localStream.getVideoTracks()[0];
+  const micTrack = state.localStream.getAudioTracks()[0];
+  RT.calls.forEach((call, peerId) => {
+    try {
+      const senders = call.peerConnection.getSenders();
+      const vSender = senders.find(s => s.track && s.track.kind === 'video');
+      if (vSender && camTrack) vSender.replaceTrack(camTrack).catch((e) => console.warn('[RT] cam restore failed', peerId, e));
+      const aSender = senders.find(s => s.track && s.track.kind === 'audio');
+      if (aSender && micTrack) aSender.replaceTrack(micTrack).catch((e) => console.warn('[RT] mic restore failed', peerId, e));
+    } catch (e) { console.warn('[RT] track restore failed for', peerId, e); }
+  });
+  rtBroadcast({ type: 'screen-state', sharing: false });
+  rtBroadcastMeta();
 }
 
 function rtReplaceLocalTracks(stream) {
