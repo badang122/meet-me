@@ -2960,16 +2960,17 @@ function attachRemoteAudio(key, stream) {
   const audioTracks = stream.getAudioTracks();
   if (!audioTracks.length) return;
   detachRemoteAudio(key);
-  const audioOnly = new MediaStream(audioTracks);
+  // Use the full stream (not a new MediaStream(audioTracks)) so that when
+  // the sender adds an audio track later (e.g. they un-mute and replaceTrack
+  // happens), our element keeps receiving it via the same stream.
   const el = document.createElement('audio');
   el.autoplay = true;
   el.playsInline = true;
-  el.srcObject = audioOnly;
+  el.srcObject = stream;
   el.style.display = 'none';
   el.dataset.audioKey = key;
   document.body.appendChild(el);
   RT.remoteAudios.set(key, el);
-  // If autoplay is blocked, surface a one-click "Enable sound" overlay.
   const playPromise = el.play();
   if (playPromise && typeof playPromise.catch === 'function') {
     playPromise.catch((err) => {
@@ -2978,6 +2979,23 @@ function attachRemoteAudio(key, stream) {
     });
   }
 }
+
+// Retry all paused remote audios on ANY user interaction — covers the case
+// where the audio element was created before the browser counted a gesture.
+let __audioRetryAttached = false;
+function ensureAudioRetryHook() {
+  if (__audioRetryAttached) return;
+  __audioRetryAttached = true;
+  const retry = () => {
+    RT.remoteAudios.forEach(el => {
+      if (el.paused) el.play().catch(() => {});
+    });
+  };
+  ['click', 'touchstart', 'keydown'].forEach(ev =>
+    document.addEventListener(ev, retry, { passive: true, capture: true })
+  );
+}
+ensureAudioRetryHook();
 
 function detachRemoteAudio(key) {
   const el = RT.remoteAudios.get(key);
@@ -3112,10 +3130,19 @@ function rtJoinAsClient(hostId, localStream) {
       const conn = peer.connect(hostId, { reliable: true, metadata: { meta: rtLocalMeta() } });
       RT.conns.set(hostId, conn);
       conn.on('open', () => {
-        // Just announce ourselves. The host's on('connection') handler will
-        // call US back with their stream — we don't initiate the media call.
-        // This avoids races where both sides create duplicate PeerConnections.
         try { conn.send({ type: 'hello', meta: rtLocalMeta() }); } catch {}
+        // Also initiate a media call from our side. The host's on('connection')
+        // handler does the same — whichever lands first wins (RT.calls.set
+        // overwrites). Belt-and-suspenders: if one direction's negotiation
+        // fails (NAT, race, etc.), the other still gets through.
+        const out = rtOutboundStream();
+        if (out && !RT.calls.has(hostId)) {
+          try {
+            const call = peer.call(hostId, out, { metadata: { kind: 'main', meta: rtLocalMeta() } });
+            RT.calls.set(hostId, call);
+            rtWireCall(call, hostId);
+          } catch (e) { console.warn('[RT] joiner→host call failed', e); }
+        }
       });
       conn.on('data', (msg) => rtHandleData(hostId, msg));
       conn.on('close', () => rtHandlePeerLeft(hostId));
@@ -3213,14 +3240,25 @@ function rtHandleData(peerId, msg) {
       renderStage();
       break;
     case 'peer-list':
-      // I'm a joiner; open data conns to every other peer in the list. They
-      // will call ME back from their on('connection') handler.
+      // I'm a joiner; open data conn + media call to every other peer in
+      // the mesh. They also call me back from their on('connection'); the
+      // duplicate is harmless (later set overwrites).
       (msg.peers || []).forEach(({ id, meta }) => {
         if (id === RT.peer.id) return;
         if (RT.conns.has(id)) return;
         const conn = RT.peer.connect(id, { reliable: true, metadata: { meta: rtLocalMeta() } });
         RT.conns.set(id, conn);
-        conn.on('open', () => conn.send({ type: 'hello', meta: rtLocalMeta() }));
+        conn.on('open', () => {
+          conn.send({ type: 'hello', meta: rtLocalMeta() });
+          const out = rtOutboundStream();
+          if (out && !RT.calls.has(id)) {
+            try {
+              const call = RT.peer.call(id, out, { metadata: { kind: 'main', meta: rtLocalMeta() } });
+              RT.calls.set(id, call);
+              rtWireCall(call, id);
+            } catch (e) { console.warn('[RT] joiner mesh call failed', id, e); }
+          }
+        });
         conn.on('data', (m) => rtHandleData(id, m));
         conn.on('close', () => rtHandlePeerLeft(id));
         conn.on('error', (e) => console.warn('[RT] conn err', id, e));
