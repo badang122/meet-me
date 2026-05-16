@@ -1,8 +1,8 @@
 # Meet — video meeting app, single file
 
-> **Live:** https://badang122.github.io/meet/
-> **Dashboard:** https://badang122.github.io/meet/dashboard.html
-> **Tests:** https://badang122.github.io/meet/tests.html
+> **Live:** https://badang122.github.io/meet-me/
+> **Dashboard:** https://badang122.github.io/meet-me/dashboard.html
+> **Tests:** https://badang122.github.io/meet-me/tests.html
 
 A self-contained Google Meet-style video meeting app. Real WebRTC P2P between participants — no install, no login, no backend you run. Your camera, mic, and screen all come from real browser APIs and stream straight to the other person.
 
