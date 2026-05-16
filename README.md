@@ -1,8 +1,33 @@
 # Meet — video meeting app, single file
 
-A self-contained Google Meet-style video meeting app. Open `index.html` in a browser. No build step, no install, no server. Your camera, mic and screen all come from real browser APIs.
+> **Live:** https://badang122.github.io/meet/
+> **Dashboard:** https://badang122.github.io/meet/dashboard.html
+> **Tests:** https://badang122.github.io/meet/tests.html
+
+A self-contained Google Meet-style video meeting app. Real WebRTC P2P between participants — no install, no login, no backend you run. Your camera, mic, and screen all come from real browser APIs and stream straight to the other person.
 
 A bonus meeting **dashboard** (calendar + analytics) ships alongside as `dashboard.html` — independent of this app.
+
+## How real-time works
+
+When two browsers open the same meeting code:
+
+- The **first joiner** claims the meeting code as their PeerJS ID (becomes "host").
+- Subsequent joiners generate `mh-<code>-<random>` IDs and open a data + media connection to the host.
+- The host introduces every new peer to existing peers — they form a **full mesh**: each peer has direct RTCPeerConnections to every other peer.
+- **Media flows peer-to-peer** (camera, mic, screen video, screen audio) via `getUserMedia` / `getDisplayMedia` → `RTCPeerConnection.addTrack`. No server in between.
+- **Chat, reactions, raised hands, mute/cam state** flow over the same WebRTC `DataChannel`.
+
+The only third-party touch point is the [PeerJS public signaling server](https://peerjs.com/) (`0.peerjs.com`) — it only relays offer/answer/ICE candidates so peers can find each other. Once connected, media never goes through it.
+
+### Try it (two devices or two browsers)
+
+1. Device A: open the live URL → **New meeting** → **Start an instant meeting** → **Join now**. Note the code in the top bar (e.g. `nar-cdga-izr`).
+2. Device B: open the same URL with `?code=nar-cdga-izr` appended (or paste the code into the home page input).
+3. Allow camera + mic on both.
+4. You see and hear each other — for real.
+
+> **Local testing:** open the live URL in two Chrome windows on the same machine. Each window gets its own camera/mic instance — works fine for testing.
 
 ```
 meeting-dashboard/
@@ -141,16 +166,14 @@ It's an independent app — separate state key (`meetinghub:v1`), separate style
 
 ## Limitations
 
-This app is intentionally a single static HTML file. To make it a "real" production meeting product you'd add:
+- **Mesh scaling:** every peer holds a connection to every other peer. Works smoothly up to ~6 people. For 7+, you'd want an SFU (e.g. mediasoup, Janus, LiveKit) instead of mesh.
+- **NAT traversal:** uses Google's public STUN server. About 8% of network pairs need TURN. For production, run your own TURN (coturn) or use a service like Twilio.
+- **Host handoff:** if the first joiner (the "host" slot) leaves, the meeting code becomes claimable again. A late joiner becomes the new host but won't automatically see other still-connected peers without a gossip layer. For a longer-lived meeting, run your own PeerServer (or move to a permanent room-based signaling layer like Supabase Realtime).
+- **No authentication:** anyone with the link can join. For invite-only meetings, gate access at the page level (e.g. Supabase Auth or NextAuth) and refuse to render the lobby until verified.
+- **No recording:** would be a `MediaRecorder` against `MediaStream` composited from all peers — about 50 extra lines of JS.
+- **Captions** are currently a fun simulation. Real captions = Web Speech API on each peer's mic feed, broadcast over the DataChannel.
 
-- **Signaling server** (WebSocket) for room presence
-- **`RTCPeerConnection`** between peers (one per direction; mesh for ≤ 6, SFU for larger)
-- **TURN/STUN** for NAT traversal
-- **Authentication** for real user identities
-- **Captions** via the Web Speech API or a server-side STT pipeline
-- **Recording** via `MediaRecorder` against the mixed stream
-
-The screen-share-with-audio piece, the mic level meter, the camera tile, and all the layout/state machinery are already production-shape — they would plug straight into a real WebRTC backend without rewrites.
+The screen-share-with-audio piece, the mic level meter, the camera tile, and all the layout/state machinery are production-shape and ship in this file.
 
 ## License
 
