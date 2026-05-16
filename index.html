@@ -2331,15 +2331,19 @@ function renderStage() {
     }
   }
 
-  // Compute grid columns / layout mode
+  // Compute grid columns / layout mode. Scales smoothly from 1:1 up to
+  // dozens of participants (the call is mesh-based; quality auto-degrades
+  // per-peer via setParameters so the mesh stays usable).
   const n = tiles.length;
-  let cols = 1;
+  let cols;
   if (n === 1) cols = 1;
   else if (n === 2) cols = 2;
   else if (n <= 4) cols = 2;
-  else if (n <= 6) cols = 3;
   else if (n <= 9) cols = 3;
-  else cols = 4;
+  else if (n <= 16) cols = 4;
+  else if (n <= 25) cols = 5;
+  else if (n <= 36) cols = 6;
+  else cols = Math.ceil(Math.sqrt(n));
 
   if (screen) {
     // Presentation mode: big screen on the left, slim participants rail on the right.
@@ -3438,10 +3442,22 @@ function rtSetupHandlers(localStream) {
   });
 }
 
-// Bump RTP sender bitrate so 1080p video isn't throttled by WebRTC defaults
-// (Chrome defaults to ~1.2 Mbps for video; 1080p wants ~3-4 Mbps).
+// Adaptive per-peer bitrate: more peers ⇒ less bandwidth per peer, so the
+// mesh stays usable even with many participants. This is what Google Meet
+// does internally — quality auto-degrades as the call grows.
+function rtPickVideoBitrate() {
+  const n = Math.max(1, RT.calls.size);
+  // Roughly halve the bitrate every time the call doubles in size.
+  if (n <= 1) return { bps: 4_000_000, width: 1920, height: 1080, fps: 30 };  // 1:1 → 1080p
+  if (n <= 3) return { bps: 2_000_000, width: 1280, height: 720,  fps: 30 };  // up to 4 ppl → 720p
+  if (n <= 6) return { bps: 1_000_000, width: 854,  height: 480,  fps: 25 };  // up to 7 ppl → 480p
+  if (n <= 12) return { bps: 500_000,  width: 640,  height: 360,  fps: 20 };  // up to 13 ppl → 360p
+  return         { bps: 250_000,  width: 426,  height: 240,  fps: 15 };       // 14+ → 240p
+}
+
 function rtBumpBitrate(call) {
   if (!call?.peerConnection) return;
+  const target = rtPickVideoBitrate();
   const senders = call.peerConnection.getSenders();
   senders.forEach((s) => {
     if (!s.track || !s.getParameters) return;
@@ -3449,8 +3465,10 @@ function rtBumpBitrate(call) {
       const params = s.getParameters();
       if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
       if (s.track.kind === 'video') {
-        params.encodings[0].maxBitrate = 4_000_000;
-        params.encodings[0].maxFramerate = 30;
+        params.encodings[0].maxBitrate = target.bps;
+        params.encodings[0].maxFramerate = target.fps;
+        // Scale resolution down too — saves encoder CPU on the sender.
+        try { params.encodings[0].scaleResolutionDownBy = Math.max(1, 1080 / target.height); } catch {}
       } else if (s.track.kind === 'audio') {
         params.encodings[0].maxBitrate = 128_000;
       }
@@ -3458,6 +3476,9 @@ function rtBumpBitrate(call) {
     } catch (e) { console.warn('[RT] bitrate bump failed', e); }
   });
 }
+
+// Re-apply bitrates to every active call (e.g. when peer count changes).
+function rtRebumpAll() { RT.calls.forEach(rtBumpBitrate); }
 
 function rtWireCall(call, peerId) {
   const kind = call.metadata?.kind || 'main';
@@ -3581,6 +3602,8 @@ function rtHandlePeerLeft(peerId) {
   rtDetachLevelMeter(`screen:${peerId}`);
   rtRefreshParticipants();
   renderStage();
+  // Peer left → maybe we can bump quality up for remaining peers.
+  setTimeout(rtRebumpAll, 200);
   toast(`${name} left`);
 }
 
@@ -3636,7 +3659,10 @@ function rtPlaceMainCall(remoteId) {
     const call = RT.peer.call(remoteId, out, { metadata: { kind: 'main', meta: rtLocalMeta() } });
     RT.calls.set(remoteId, call);
     rtWireCall(call, remoteId);
-    console.info('[RT] placed main call →', remoteId);
+    console.info('[RT] placed main call →', remoteId, '(total peers:', RT.calls.size, ')');
+    // Peer count changed → adjust bitrate on all calls so the mesh stays
+    // healthy as the meeting grows.
+    setTimeout(rtRebumpAll, 200);
   } catch (e) { console.warn('[RT] placeMainCall failed', remoteId, e); }
 }
 
