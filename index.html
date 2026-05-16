@@ -3010,6 +3010,19 @@ function rtLocalMeta() {
   };
 }
 
+// ICE servers used for all WebRTC connections. Google STUN is good enough for
+// peers on the same NAT, but ~20% of network pairs need TURN to traverse
+// strict NAT/firewalls — without it, screen share or video often arrives blank.
+// OpenRelay (Metered.ca) offers a free public TURN with permissive creds.
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+];
+const PEER_OPTS = { debug: 0, config: { iceServers: ICE_SERVERS } };
+
 async function rtConnect(code, localStream) {
   if (typeof Peer === 'undefined') {
     RT.mode = 'demo';
@@ -3019,7 +3032,7 @@ async function rtConnect(code, localStream) {
   // Sanitize host ID (PeerJS allows a-zA-Z0-9_-).
   const hostId = `mh-${String(code).replace(/[^a-z0-9-]/g, '').slice(0, 40)}`;
   return new Promise((resolve) => {
-    const tryAsHost = new Peer(hostId, { debug: 0 });
+    const tryAsHost = new Peer(hostId, PEER_OPTS);
     let settled = false;
     const finishHost = (id) => {
       if (settled) return; settled = true;
@@ -3062,7 +3075,7 @@ async function rtConnect(code, localStream) {
 function rtJoinAsClient(hostId, localStream) {
   return new Promise((resolve, reject) => {
     const myId = `${hostId}-${Math.random().toString(36).slice(2, 8)}`;
-    const peer = new Peer(myId, { debug: 0 });
+    const peer = new Peer(myId, PEER_OPTS);
     let settled = false;
     peer.on('open', () => {
       // We're connected to signaling. Mark connected immediately; the actual
@@ -3115,6 +3128,25 @@ function rtSetupHandlers(localStream) {
         const list = others.map(pid => ({ id: pid, meta: RT.remoteMeta.get(pid) || null }));
         conn.send({ type: 'peer-list', peers: list });
       }
+      // If we're currently presenting, also screen-share to this new peer
+      // so they immediately see our shared content (otherwise they'd join blind).
+      if (state.screenStream && !RT.screenCalls.has(id)) {
+        try {
+          const call = RT.peer.call(id, state.screenStream, { metadata: { kind: 'screen' } });
+          RT.screenCalls.set(id, call);
+          rtWireCall(call, id);
+          console.info('[RT] screen-sharing to new peer', id);
+        } catch (e) { console.warn('[RT] screen call to new peer failed', id, e); }
+      }
+      // Also place a regular media call (camera+mic) to this new peer so they
+      // can see/hear us without waiting for them to call us.
+      if (state.localStream && !RT.calls.has(id)) {
+        try {
+          const call = RT.peer.call(id, state.localStream, { metadata: { kind: 'main', meta: rtLocalMeta() } });
+          RT.calls.set(id, call);
+          rtWireCall(call, id);
+        } catch (e) { console.warn('[RT] media call to new peer failed', id, e); }
+      }
     });
     conn.on('data', (msg) => rtHandleData(id, msg));
     conn.on('close', () => rtHandlePeerLeft(id));
@@ -3123,10 +3155,19 @@ function rtSetupHandlers(localStream) {
   // Incoming media call
   RT.peer.on('call', (call) => {
     const id = call.peer;
-    call.answer(state.localStream || undefined);
     const kind = call.metadata?.kind || 'main';
-    if (kind === 'screen') RT.screenCalls.set(id, call);
-    else RT.calls.set(id, call);
+    // Screen-share calls are one-way: the sender is presenting, we just
+    // receive. Answering without a stream avoids sending our camera back
+    // through the screen connection (saves bandwidth + cleaner negotiation).
+    if (kind === 'screen') {
+      call.answer();
+      RT.screenCalls.set(id, call);
+      const senderName = (RT.remoteMeta.get(id) || {}).name || 'Someone';
+      toast(`${senderName} is presenting their screen`);
+    } else {
+      call.answer(state.localStream || undefined);
+      RT.calls.set(id, call);
+    }
     rtWireCall(call, id);
   });
   RT.peer.on('disconnected', () => {
