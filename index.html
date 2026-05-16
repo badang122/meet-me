@@ -1246,6 +1246,25 @@ input, textarea, select { font-family: inherit; color: inherit; }
 }
 .btn-home:hover { background: var(--surface-3); }
 
+/* ============== Audio unblock banner ============== */
+.audio-unblock {
+  position: fixed;
+  top: 16px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px;
+  background: var(--gradient);
+  color: white;
+  padding: 11px 22px;
+  border-radius: 100px;
+  font-size: 13.5px; font-weight: 600;
+  box-shadow: 0 8px 24px rgba(167,139,250,.40), inset 0 1px 0 rgba(255,255,255,.18);
+  cursor: pointer;
+  z-index: 250;
+  animation: slideDown .25s ease;
+  transition: transform .12s, filter .12s;
+}
+.audio-unblock:hover { transform: translateX(-50%) translateY(-1px); filter: brightness(1.1); }
+@keyframes slideDown { from { transform: translateX(-50%) translateY(-20px); opacity: 0; } to { transform: translateX(-50%) translateY(0); opacity: 1; } }
+
 /* ============== Toasts ============== */
 .toasts {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
@@ -1700,26 +1719,48 @@ function toast(msg) {
 
 /* ---------- Media: camera + mic ---------- */
 async function startLocalMedia({ video = true, audio = true } = {}) {
+  // First: try the full request.
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: audio ? { echoCancellation: true, noiseSuppression: true } : false,
+      audio: audio ? { echoCancellation: true, noiseSuppression: true, autoGainControl: true } : false,
       video: video ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
     });
     state.localStream = stream;
     setupMicAnalyser(stream);
     return stream;
   } catch (e) {
-    console.warn('getUserMedia failed', e);
-    if (e.name === 'NotAllowedError') {
-      toast('Camera/mic permission denied. The meeting will run without your video.');
-    } else if (e.name === 'NotFoundError') {
-      toast('No camera or mic found.');
-    } else {
-      toast('Unable to access camera/mic.');
-    }
-    state.localStream = null;
-    return null;
+    console.warn('[media] both failed:', e.name, e.message);
   }
+  // Fallback 1: try audio-only — voice is more important than video
+  if (audio) {
+    try {
+      const aStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false,
+      });
+      state.localStream = aStream;
+      setupMicAnalyser(aStream);
+      state.camOn = false;
+      toast('Camera blocked — running with audio only');
+      return aStream;
+    } catch (e) { console.warn('[media] audio-only failed:', e.name); }
+  }
+  // Fallback 2: try video-only
+  if (video) {
+    try {
+      const vStream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      });
+      state.localStream = vStream;
+      state.micOn = false;
+      toast('Microphone blocked — you can see and be seen but not heard');
+      return vStream;
+    } catch (e) { console.warn('[media] video-only failed:', e.name); }
+  }
+  state.localStream = null;
+  toast('No camera or microphone available — joined as observer');
+  return null;
 }
 
 function stopLocalMedia() {
@@ -2153,11 +2194,11 @@ function renderStage() {
     if (t.kind === 'screen') {
       const sc = t.screen;
       const hasAudio = sc.hasAudio;
-      // For remote screen: don't mute, so we hear the shared audio
-      const muteAttr = sc.isSelf ? 'muted' : '';
+      // Mute the <video> element: audio plays via a dedicated <audio> element
+      // attached on stream-arrival (more reliable, bypasses autoplay quirks).
       return `
         <div class="tile is-screen" style="grid-column: span ${Math.min(cols, 2)};">
-          <video class="media" autoplay ${muteAttr} playsinline id="screenVideo" data-screen-source="${sc.isSelf ? 'self' : sc.peerId}"></video>
+          <video class="media" autoplay muted playsinline id="screenVideo" data-screen-source="${sc.isSelf ? 'self' : sc.peerId}"></video>
           <div class="share-audio-meter ${hasAudio ? '' : 'muted'}" title="${hasAudio ? 'Tab/system audio is being shared' : 'No audio is being shared'}">
             <span class="dot"></span>
             <span>${hasAudio ? 'Audio shared' : 'No audio'}</span>
@@ -2186,7 +2227,7 @@ function renderStage() {
         ${p.isSelf
           ? `<video class="media" id="selfTileVideo" autoplay muted playsinline></video>`
           : hasRemoteStream
-            ? `<video class="media" data-pid="${p.id}" autoplay playsinline></video>`
+            ? `<video class="media" data-pid="${p.id}" autoplay playsinline muted></video>`
             : `<canvas class="media" data-pid="${p.id}" width="640" height="360"></canvas>`}
         <div class="avatar-big" style="background: linear-gradient(135deg, ${p.color}, #f472b6);">${p.initials}</div>
         <div class="tile-name">
@@ -2900,8 +2941,63 @@ const RT = {
   remoteStreams: new Map(), // peerId -> MediaStream (camera)
   remoteScreens: new Map(), // peerId -> MediaStream (screen)
   remoteMeta: new Map(),    // peerId -> { name, color, micOn, camOn, hand }
+  remoteAudios: new Map(),  // audioKey -> HTMLAudioElement (audio playback, separate from video)
+  audioBlocked: false,      // true if browser blocks autoplay of remote audio
   mode: 'idle',             // 'idle' | 'connecting' | 'connected' | 'demo'
 };
+
+// Play a remote stream's audio via a dedicated <audio> element (bypasses
+// <video> autoplay quirks; this is the canonical WebRTC pattern).
+function attachRemoteAudio(key, stream) {
+  if (!stream) return;
+  const audioTracks = stream.getAudioTracks();
+  if (!audioTracks.length) return;
+  detachRemoteAudio(key);
+  const audioOnly = new MediaStream(audioTracks);
+  const el = document.createElement('audio');
+  el.autoplay = true;
+  el.playsInline = true;
+  el.srcObject = audioOnly;
+  el.style.display = 'none';
+  el.dataset.audioKey = key;
+  document.body.appendChild(el);
+  RT.remoteAudios.set(key, el);
+  // If autoplay is blocked, surface a one-click "Enable sound" overlay.
+  const playPromise = el.play();
+  if (playPromise && typeof playPromise.catch === 'function') {
+    playPromise.catch((err) => {
+      console.warn('[audio] autoplay blocked for', key, err?.name || err);
+      showAudioUnblockBanner();
+    });
+  }
+}
+
+function detachRemoteAudio(key) {
+  const el = RT.remoteAudios.get(key);
+  if (!el) return;
+  try { el.pause(); el.srcObject = null; el.remove(); } catch {}
+  RT.remoteAudios.delete(key);
+}
+
+function showAudioUnblockBanner() {
+  if (RT.audioBlocked) return;
+  RT.audioBlocked = true;
+  let bar = document.getElementById('audioUnblockBar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'audioUnblockBar';
+    bar.className = 'audio-unblock';
+    bar.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg> Click to enable sound from other participants';
+    bar.addEventListener('click', async () => {
+      let ok = true;
+      for (const el of RT.remoteAudios.values()) {
+        try { await el.play(); } catch (e) { ok = false; console.warn('[audio] still blocked', e); }
+      }
+      if (ok) { RT.audioBlocked = false; bar.remove(); }
+    });
+    document.body.appendChild(bar);
+  }
+}
 
 function rtLocalMeta() {
   return {
@@ -3046,8 +3142,10 @@ function rtWireCall(call, peerId) {
   call.on('stream', (stream) => {
     if (call.metadata?.kind === 'screen') {
       RT.remoteScreens.set(peerId, stream);
+      attachRemoteAudio(`screen:${peerId}`, stream);
     } else {
       RT.remoteStreams.set(peerId, stream);
+      attachRemoteAudio(peerId, stream);
     }
     rtRefreshParticipants();
     renderStage();
@@ -3056,10 +3154,12 @@ function rtWireCall(call, peerId) {
     if (RT.calls.get(peerId) === call) {
       RT.calls.delete(peerId);
       RT.remoteStreams.delete(peerId);
+      detachRemoteAudio(peerId);
     }
     if (RT.screenCalls.get(peerId) === call) {
       RT.screenCalls.delete(peerId);
       RT.remoteScreens.delete(peerId);
+      detachRemoteAudio(`screen:${peerId}`);
     }
     rtRefreshParticipants();
     renderStage();
@@ -3136,6 +3236,8 @@ function rtHandlePeerLeft(peerId) {
   RT.remoteStreams.delete(peerId);
   RT.remoteScreens.delete(peerId);
   RT.remoteMeta.delete(peerId);
+  detachRemoteAudio(peerId);
+  detachRemoteAudio(`screen:${peerId}`);
   rtRefreshParticipants();
   renderStage();
   toast(`${name} left`);
@@ -3216,6 +3318,10 @@ function rtDisconnect() {
   RT.peer = null; RT.isHost = false; RT.mode = 'idle';
   RT.calls.clear(); RT.screenCalls.clear(); RT.conns.clear();
   RT.remoteStreams.clear(); RT.remoteScreens.clear(); RT.remoteMeta.clear();
+  // Tear down all dedicated audio elements
+  for (const key of Array.from(RT.remoteAudios.keys())) detachRemoteAudio(key);
+  document.getElementById('audioUnblockBar')?.remove();
+  RT.audioBlocked = false;
 }
 
 window.RT = RT;
