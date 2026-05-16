@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Google+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2.5.7/dist/livekit-client.umd.min.js"></script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='64' y2='64' gradientUnits='userSpaceOnUse'%3E%3Cstop offset='0%25' stop-color='%23818cf8'/%3E%3Cstop offset='50%25' stop-color='%23a78bfa'/%3E%3Cstop offset='100%25' stop-color='%23f472b6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='4' y='4' width='56' height='56' rx='14' fill='url(%23g)'/%3E%3Crect x='16' y='22' width='28' height='20' rx='3' fill='white'/%3E%3Cpath d='M44 28 l8 -5 v18 l-8 -5 z' fill='white'/%3E%3C/svg%3E">
 <style>
 /* =========================================================
@@ -2266,17 +2267,31 @@ async function joinMeeting() {
   addRecent(state.meeting.code);
   startMeetingTickers();
 
-  // Connect to signaling for real WebRTC mesh
-  const rt = await rtConnect(state.meeting.code, state.localStream);
-  if (rt.ok) {
-    if (rt.isHost) {
-      // Auto-copy invite link so host can paste straight into a chat/DM
+  // Try LiveKit Cloud first (SFU — scales + cross-network reliable).
+  // If not configured, fall back to PeerJS mesh.
+  let rt = { ok: false };
+  if (LK_CONFIG.sandboxId) {
+    rt = await lkConnect(state.meeting.code, state.localStream);
+    if (rt.ok) {
       const copied = await copyShareUrl(state.meeting.code, { silent: true });
-      toast(copied ? 'Meeting started — invite link copied to clipboard' : 'Meeting started — click "Copy link" to invite');
+      toast(copied ? 'Meeting started — invite link copied' : 'Meeting started');
     } else {
-      toast('Connected to meeting');
+      console.warn('[LK] failed, falling back to PeerJS:', rt.why);
     }
-    rtRefreshParticipants();
+  }
+  if (!rt.ok) {
+    rt = await rtConnect(state.meeting.code, state.localStream);
+  }
+  if (rt.ok) {
+    if (!LK.active) {
+      if (rt.isHost) {
+        const copied = await copyShareUrl(state.meeting.code, { silent: true });
+        toast(copied ? 'Meeting started — invite link copied to clipboard' : 'Meeting started — click "Copy link" to invite');
+      } else {
+        toast('Connected to meeting');
+      }
+      rtRefreshParticipants();
+    }
   } else {
     // Fallback to demo mode if signaling unreachable
     console.warn('[RT] falling back to demo:', rt.why);
@@ -2531,7 +2546,12 @@ function setMic(on) {
   if (state.localStream) state.localStream.getAudioTracks().forEach(t => t.enabled = on);
   const me = state.participants.find(p => p.isSelf);
   if (me) me.micOn = on;
-  if (RT.mode === 'connected') rtBroadcastMeta();
+  // For LiveKit, enable/disable the published audio track (mute/unmute).
+  if (LK.active && LK.room?.localParticipant) {
+    LK.room.localParticipant.setMicrophoneEnabled(on).catch(() => {});
+  }
+  if (LK.active) lkBroadcast({ type: 'meta', meta: rtLocalMeta() });
+  else if (RT.mode === 'connected') rtBroadcastMeta();
   renderControls();
   renderStage();
   if (state.panel === 'people') renderPanel();
@@ -2552,7 +2572,10 @@ async function setCam(on) {
   }
   const me = state.participants.find(p => p.isSelf);
   if (me) me.camOn = on;
-  if (RT.mode === 'connected') {
+  if (LK.active && LK.room?.localParticipant) {
+    LK.room.localParticipant.setCameraEnabled(on).catch(() => {});
+    lkBroadcast({ type: 'meta', meta: rtLocalMeta() });
+  } else if (RT.mode === 'connected') {
     if (newStream && state.localStream) rtReplaceLocalTracks(state.localStream);
     rtBroadcastMeta();
   }
@@ -2601,8 +2624,10 @@ async function startScreenShare() {
       toast('Sharing screen. Tip: pick a Chrome tab and check "Share tab audio" to also share sound.');
     }
 
-    // Send screen stream to all connected peers (separate MediaConnection)
-    if (RT.mode === 'connected') {
+    // Send screen stream to remote peers
+    if (LK.active) {
+      lkPublishScreenShare(stream).catch((e) => console.warn('[LK] screen publish failed', e));
+    } else if (RT.mode === 'connected') {
       rtStartScreenShareToAll(stream);
       rtBroadcastMeta();
     }
@@ -2697,7 +2722,9 @@ function stopScreenShare(byBrowser = false) {
     state.screenAnalyser = null;
   }
   setScreenMonitor(false);
-  if (RT.mode === 'connected') {
+  if (LK.active) {
+    lkUnpublishScreenShare().catch((e) => console.warn('[LK] screen unpublish failed', e));
+  } else if (RT.mode === 'connected') {
     rtStopScreenShareToAll();
     rtBroadcastMeta();
   }
@@ -2716,7 +2743,9 @@ document.getElementById('ctrlHand').addEventListener('click', () => {
   state.handUp = !state.handUp;
   const me = state.participants.find(p => p.isSelf);
   if (me) me.hand = state.handUp;
-  if (RT.mode === 'connected') {
+  if (LK.active) {
+    lkBroadcast({ type: 'hand', up: state.handUp });
+  } else if (RT.mode === 'connected') {
     rtBroadcast({ type: 'hand', up: state.handUp });
     rtBroadcastMeta();
   }
@@ -2738,7 +2767,8 @@ document.addEventListener('click', (e) => {
 reactionsBar.querySelectorAll('[data-rx]').forEach(b => {
   b.addEventListener('click', () => {
     floatReaction(b.dataset.rx);
-    if (RT.mode === 'connected') rtBroadcast({ type: 'reaction', emoji: b.dataset.rx });
+    if (LK.active) lkBroadcast({ type: 'reaction', emoji: b.dataset.rx });
+    else if (RT.mode === 'connected') rtBroadcast({ type: 'reaction', emoji: b.dataset.rx });
     reactionsBar.classList.remove('show');
   });
 });
@@ -2914,7 +2944,9 @@ function renderPanel() {
       if (!v) return;
       addChat({ from: state.user.name || 'You', text: v, ts: Meet.fmtClock(new Date()) });
       input.value = '';
-      if (RT.mode === 'connected') {
+      if (LK.active) {
+        lkBroadcast({ type: 'chat', text: v });
+      } else if (RT.mode === 'connected') {
         rtBroadcast({ type: 'chat', text: v });
       } else {
         // Demo mode: simulate response sometimes
@@ -3054,6 +3086,7 @@ function leaveMeeting() {
   const r = state.recent.find(x => x.code === state.meeting.code);
   if (r) r.durationSec = duration;
   saveRecents();
+  if (LK.active) lkDisconnect().catch(() => {});
   rtDisconnect();
   stopLocalMedia();
   clearInterval(tickerTimer); clearInterval(clockTimer); clearInterval(speakingTimer); clearInterval(captionsInterval);
@@ -3827,6 +3860,214 @@ function rtDisconnect() {
 }
 
 window.RT = RT;
+
+/* ============================================================
+   LiveKit backend (SFU) — replaces PeerJS mesh when configured.
+   Cross-network, scales to many participants, has TURN built in.
+   ============================================================ */
+const LK_CONFIG = {
+  // LiveKit Cloud Sandbox (Token Server) — auto-mints connection tokens.
+  // The actual serverUrl + JWT are returned by the sandbox endpoint.
+  sandboxId: 'meet-me-abc123-2jq91i',
+};
+
+const LK = {
+  room: null,
+  active: false,        // true if we're using LiveKit instead of PeerJS
+  localTracks: [],      // LocalTrack[] currently published
+  participants: new Map(), // identity -> { name, tracks: Map<sid, RemoteTrack> }
+};
+
+async function lkFetchToken(roomName, participantName) {
+  if (!LK_CONFIG.sandboxId) throw new Error('LiveKit Sandbox ID not configured');
+  const url = `https://cloud-api.livekit.io/api/sandbox/connection-details?roomName=${encodeURIComponent(roomName)}&participantName=${encodeURIComponent(participantName)}`;
+  const res = await fetch(url, { headers: { 'X-Sandbox-ID': LK_CONFIG.sandboxId } });
+  if (!res.ok) throw new Error('Sandbox token fetch failed: ' + res.status);
+  const data = await res.json();
+  if (!data?.serverUrl || !data?.participantToken) throw new Error('Sandbox returned invalid response');
+  return data;
+}
+
+async function lkConnect(code, localStream) {
+  if (typeof LivekitClient === 'undefined') {
+    return { ok: false, why: 'LiveKit SDK not loaded' };
+  }
+  if (!LK_CONFIG.sandboxId) {
+    return { ok: false, why: 'LiveKit not configured — using PeerJS mesh' };
+  }
+  try {
+    const roomName = `mh-${code}`;
+    const participantName = state.user.name || 'Guest';
+    const { serverUrl, participantToken } = await lkFetchToken(roomName, participantName);
+
+    const room = new LivekitClient.Room({
+      adaptiveStream: true,
+      dynacast: true,
+      videoCaptureDefaults: {
+        resolution: LivekitClient.VideoPresets.h1080.resolution,
+      },
+    });
+    LK.room = room;
+    LK.active = true;
+
+    // Wire room events
+    room.on(LivekitClient.RoomEvent.ParticipantConnected, lkOnParticipantJoin);
+    room.on(LivekitClient.RoomEvent.ParticipantDisconnected, lkOnParticipantLeave);
+    room.on(LivekitClient.RoomEvent.TrackSubscribed, lkOnTrackSubscribed);
+    room.on(LivekitClient.RoomEvent.TrackUnsubscribed, lkOnTrackUnsubscribed);
+    room.on(LivekitClient.RoomEvent.DataReceived, lkOnDataReceived);
+    room.on(LivekitClient.RoomEvent.ActiveSpeakersChanged, lkOnSpeakersChanged);
+    room.on(LivekitClient.RoomEvent.Disconnected, lkOnDisconnected);
+
+    await room.connect(serverUrl, participantToken);
+
+    // Publish our local tracks
+    if (localStream) {
+      for (const track of localStream.getTracks()) {
+        await room.localParticipant.publishTrack(track, {
+          source: track.kind === 'audio' ? LivekitClient.Track.Source.Microphone : LivekitClient.Track.Source.Camera,
+        });
+      }
+    }
+
+    // Initial participant list (anyone already in the room)
+    room.remoteParticipants.forEach((p) => lkOnParticipantJoin(p));
+
+    console.info('[LK] connected', { room: roomName, identity: room.localParticipant.identity });
+    return { ok: true, isHost: room.remoteParticipants.size === 0, peerId: room.localParticipant.identity };
+  } catch (e) {
+    console.warn('[LK] connect failed', e);
+    LK.active = false;
+    return { ok: false, why: String(e?.message || e) };
+  }
+}
+
+function lkOnParticipantJoin(participant) {
+  LK.participants.set(participant.identity, { name: participant.name || participant.identity, tracks: new Map() });
+  RT.remoteMeta.set(participant.identity, { name: participant.name || participant.identity, color: '#a78bfa', micOn: true, camOn: true });
+  rtRefreshParticipants();
+  renderStage();
+}
+
+function lkOnParticipantLeave(participant) {
+  LK.participants.delete(participant.identity);
+  RT.remoteMeta.delete(participant.identity);
+  RT.remoteStreams.delete(participant.identity);
+  detachRemoteAudio(participant.identity);
+  rtDetachLevelMeter(participant.identity);
+  rtRefreshParticipants();
+  renderStage();
+}
+
+function lkOnTrackSubscribed(track, publication, participant) {
+  const id = participant.identity;
+  const entry = LK.participants.get(id) || { name: participant.name || id, tracks: new Map() };
+  entry.tracks.set(publication.trackSid, track);
+  LK.participants.set(id, entry);
+
+  // Build a MediaStream containing all the participant's currently-subscribed
+  // tracks so the existing render code (which expects RT.remoteStreams to be
+  // a MediaStream per peer) keeps working unchanged.
+  const stream = RT.remoteStreams.get(id) || new MediaStream();
+  if (track.mediaStreamTrack) {
+    try { stream.addTrack(track.mediaStreamTrack); } catch {}
+  }
+  RT.remoteStreams.set(id, stream);
+
+  if (track.kind === 'audio') {
+    attachRemoteAudio(id, stream);
+  }
+  // For screen-share tracks: LiveKit identifies them via track.source === 'screen_share'
+  if (publication.source === LivekitClient.Track.Source.ScreenShare) {
+    RT.remoteScreens.set(id, stream);
+    const meta = RT.remoteMeta.get(id) || {};
+    meta.screening = true;
+    meta.screenHasAudio = publication.source === LivekitClient.Track.Source.ScreenShareAudio;
+    RT.remoteMeta.set(id, meta);
+  }
+  rtRefreshParticipants();
+  renderStage();
+}
+
+function lkOnTrackUnsubscribed(track, publication, participant) {
+  const id = participant.identity;
+  const stream = RT.remoteStreams.get(id);
+  if (stream && track.mediaStreamTrack) {
+    try { stream.removeTrack(track.mediaStreamTrack); } catch {}
+  }
+  if (publication.source === LivekitClient.Track.Source.ScreenShare) {
+    RT.remoteScreens.delete(id);
+    const meta = RT.remoteMeta.get(id) || {};
+    meta.screening = false;
+    RT.remoteMeta.set(id, meta);
+  }
+  renderStage();
+}
+
+function lkOnDataReceived(payload, participant) {
+  try {
+    const msg = JSON.parse(new TextDecoder().decode(payload));
+    if (participant?.identity) rtHandleData(participant.identity, msg);
+  } catch (e) { console.warn('[LK] data parse failed', e); }
+}
+
+function lkOnSpeakersChanged(speakers) {
+  // speakers: ActiveSpeaker[] — { identity, audioLevel }. Set "speaking" flag.
+  const speakingIds = new Set(speakers.map(s => s.identity));
+  state.participants.forEach(p => { if (!p.isSelf) p.speaking = speakingIds.has(p.id); });
+  document.querySelectorAll('.tile').forEach(t => {
+    const id = t.dataset.id;
+    t.classList.toggle('speaking', speakingIds.has(id));
+  });
+}
+
+function lkOnDisconnected(reason) {
+  console.warn('[LK] disconnected', reason);
+  LK.active = false;
+  toast('Disconnected from meeting');
+}
+
+async function lkPublishScreenShare(screenStream) {
+  if (!LK.room) return;
+  const videoTrack = screenStream.getVideoTracks()[0];
+  const audioTrack = screenStream.getAudioTracks()[0];
+  if (videoTrack) {
+    await LK.room.localParticipant.publishTrack(videoTrack, { source: LivekitClient.Track.Source.ScreenShare });
+  }
+  if (audioTrack) {
+    await LK.room.localParticipant.publishTrack(audioTrack, { source: LivekitClient.Track.Source.ScreenShareAudio });
+  }
+}
+
+async function lkUnpublishScreenShare() {
+  if (!LK.room) return;
+  const pubs = LK.room.localParticipant.trackPublications;
+  for (const [sid, pub] of pubs) {
+    if (pub.source === LivekitClient.Track.Source.ScreenShare ||
+        pub.source === LivekitClient.Track.Source.ScreenShareAudio) {
+      await LK.room.localParticipant.unpublishTrack(pub.track, true);
+    }
+  }
+}
+
+function lkBroadcast(msg) {
+  if (!LK.room) return;
+  try {
+    const data = new TextEncoder().encode(JSON.stringify(msg));
+    LK.room.localParticipant.publishData(data, LivekitClient.DataPacket_Kind.RELIABLE);
+  } catch (e) { console.warn('[LK] publishData failed', e); }
+}
+
+async function lkDisconnect() {
+  if (LK.room) {
+    try { await LK.room.disconnect(); } catch {}
+    LK.room = null;
+  }
+  LK.active = false;
+  LK.participants.clear();
+}
+
+window.LK = LK;
 
 /* ---------- Boot ---------- */
 // Pick up ?code= from URL
