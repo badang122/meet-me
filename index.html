@@ -2959,10 +2959,18 @@ function attachRemoteAudio(key, stream) {
   if (!stream) return;
   const audioTracks = stream.getAudioTracks();
   if (!audioTracks.length) return;
-  detachRemoteAudio(key);
-  // Use the full stream (not a new MediaStream(audioTracks)) so that when
-  // the sender adds an audio track later (e.g. they un-mute and replaceTrack
-  // happens), our element keeps receiving it via the same stream.
+  // Idempotent: if we already have an audio element for this peer, just
+  // point it at the latest stream (don't recreate — recreate causes audio
+  // pause/resume thrash when multiple call.on('stream') events fire).
+  if (RT.remoteAudios.has(key)) {
+    const existing = RT.remoteAudios.get(key);
+    if (existing.srcObject !== stream) {
+      existing.srcObject = stream;
+      const p = existing.play();
+      if (p && p.catch) p.catch(() => showAudioUnblockBanner());
+    }
+    return;
+  }
   const el = document.createElement('audio');
   el.autoplay = true;
   el.playsInline = true;
@@ -3131,18 +3139,10 @@ function rtJoinAsClient(hostId, localStream) {
       RT.conns.set(hostId, conn);
       conn.on('open', () => {
         try { conn.send({ type: 'hello', meta: rtLocalMeta() }); } catch {}
-        // Also initiate a media call from our side. The host's on('connection')
-        // handler does the same — whichever lands first wins (RT.calls.set
-        // overwrites). Belt-and-suspenders: if one direction's negotiation
-        // fails (NAT, race, etc.), the other still gets through.
-        const out = rtOutboundStream();
-        if (out && !RT.calls.has(hostId)) {
-          try {
-            const call = peer.call(hostId, out, { metadata: { kind: 'main', meta: rtLocalMeta() } });
-            RT.calls.set(hostId, call);
-            rtWireCall(call, hostId);
-          } catch (e) { console.warn('[RT] joiner→host call failed', e); }
-        }
+        // Convention: peer with lexicographically smaller ID initiates the
+        // media call. Avoids duplicate RTCPeerConnections (which cause audio
+        // stream-event thrash and double-pipe overhead).
+        if (RT.peer.id < hostId) rtPlaceMainCall(hostId);
       });
       conn.on('data', (msg) => rtHandleData(hostId, msg));
       conn.on('close', () => rtHandlePeerLeft(hostId));
@@ -3176,17 +3176,10 @@ function rtSetupHandlers(localStream) {
         const list = others.map(pid => ({ id: pid, meta: RT.remoteMeta.get(pid) || null }));
         conn.send({ type: 'peer-list', peers: list });
       }
-      // Proactively call this new peer with our current outbound stream
-      // (screen tracks if we're presenting; otherwise camera+mic). Track
-      // swaps handle the transition when sharing starts/stops later.
-      const out = rtOutboundStream();
-      if (out && !RT.calls.has(id)) {
-        try {
-          const call = RT.peer.call(id, out, { metadata: { kind: 'main', meta: rtLocalMeta() } });
-          RT.calls.set(id, call);
-          rtWireCall(call, id);
-        } catch (e) { console.warn('[RT] media call to new peer failed', id, e); }
-      }
+      // Only initiate the media call if my ID is lex-smaller than theirs.
+      // Otherwise we'd both initiate, creating duplicate PeerConnections
+      // and racy on('stream') events on the receiver.
+      if (RT.peer.id < id) rtPlaceMainCall(id);
     });
     conn.on('data', (msg) => rtHandleData(id, msg));
     conn.on('close', () => rtHandlePeerLeft(id));
@@ -3240,9 +3233,8 @@ function rtHandleData(peerId, msg) {
       renderStage();
       break;
     case 'peer-list':
-      // I'm a joiner; open data conn + media call to every other peer in
-      // the mesh. They also call me back from their on('connection'); the
-      // duplicate is harmless (later set overwrites).
+      // I'm a joiner; open data conn to every other peer in the mesh.
+      // Same lex-ID convention decides who initiates the media call.
       (msg.peers || []).forEach(({ id, meta }) => {
         if (id === RT.peer.id) return;
         if (RT.conns.has(id)) return;
@@ -3250,14 +3242,7 @@ function rtHandleData(peerId, msg) {
         RT.conns.set(id, conn);
         conn.on('open', () => {
           conn.send({ type: 'hello', meta: rtLocalMeta() });
-          const out = rtOutboundStream();
-          if (out && !RT.calls.has(id)) {
-            try {
-              const call = RT.peer.call(id, out, { metadata: { kind: 'main', meta: rtLocalMeta() } });
-              RT.calls.set(id, call);
-              rtWireCall(call, id);
-            } catch (e) { console.warn('[RT] joiner mesh call failed', id, e); }
-          }
+          if (RT.peer.id < id) rtPlaceMainCall(id);
         });
         conn.on('data', (m) => rtHandleData(id, m));
         conn.on('close', () => rtHandlePeerLeft(id));
@@ -3354,6 +3339,20 @@ function rtBroadcast(msg) {
 }
 
 function rtBroadcastMeta() { rtBroadcast({ type: 'meta', meta: rtLocalMeta() }); }
+
+// Place a main media call (camera+mic, or screen if presenting) to a peer.
+// Guarded so we never create duplicate RTCPeerConnections for the same peer.
+function rtPlaceMainCall(remoteId) {
+  if (!RT.peer || RT.calls.has(remoteId)) return;
+  const out = rtOutboundStream();
+  if (!out) return;
+  try {
+    const call = RT.peer.call(remoteId, out, { metadata: { kind: 'main', meta: rtLocalMeta() } });
+    RT.calls.set(remoteId, call);
+    rtWireCall(call, remoteId);
+    console.info('[RT] placed main call →', remoteId);
+  } catch (e) { console.warn('[RT] placeMainCall failed', remoteId, e); }
+}
 
 // Replace the video (and optionally audio) tracks in every established main
 // peer connection with the screen-share tracks. This reuses the already-
