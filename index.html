@@ -1819,7 +1819,7 @@ async function startLocalMedia({ video = true, audio = true } = {}) {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: audio ? { echoCancellation: true, noiseSuppression: true, autoGainControl: true } : false,
-      video: video ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
+      video: video ? { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } } : false,
     });
     state.localStream = stream;
     setupMicAnalyser(stream);
@@ -1845,7 +1845,7 @@ async function startLocalMedia({ video = true, audio = true } = {}) {
   if (video) {
     try {
       const vStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
         audio: false,
       });
       state.localStream = vStream;
@@ -2194,6 +2194,13 @@ async function joinMeeting() {
   if (state.localStream) {
     state.localStream.getAudioTracks().forEach(t => t.enabled = state.micOn);
     state.localStream.getVideoTracks().forEach(t => t.enabled = state.camOn);
+    // Make sure there's always a video track in the outbound stream — even
+    // if the user has no camera or denied permission. We add a tiny fake
+    // canvas-backed video track so the RTCPeerConnection has a video sender
+    // that can later be `replaceTrack`-ed with the screen video when sharing.
+    if (state.localStream.getVideoTracks().length === 0) {
+      try { state.localStream.addTrack(rtGetFakeVideoTrack()); } catch (e) {}
+    }
   }
 
   // Mark visible
@@ -2240,17 +2247,20 @@ async function joinMeeting() {
 
 function renderStage() {
   const stage = document.getElementById('stage');
-  // Determine active screen share: local takes precedence, else the first
-  // remote screen MediaConnection that has actually delivered a stream.
+  // Determine active screen share: local takes precedence, else a remote
+  // peer whose meta says they're presenting. Their main stream NOW carries
+  // the screen content (we swap tracks in-place on the single PC).
   let screen = null;
   let remoteScreenPeerId = null;
   if (state.screenStream) {
     screen = { presenter: state.user.name || 'You', isSelf: true, hasAudio: state.screenHasAudio };
-  } else if (RT.remoteScreens.size > 0) {
-    remoteScreenPeerId = RT.remoteScreens.keys().next().value;
-    const rs = RT.remoteScreens.get(remoteScreenPeerId);
-    const meta = RT.remoteMeta.get(remoteScreenPeerId) || {};
-    screen = { presenter: meta.name || 'Guest', isSelf: false, hasAudio: !!(rs && rs.getAudioTracks().length), peerId: remoteScreenPeerId };
+  } else {
+    const sharing = state.participants.find(p => !p.isSelf && p.screening);
+    if (sharing) {
+      remoteScreenPeerId = sharing.id;
+      const meta = RT.remoteMeta.get(sharing.id) || {};
+      screen = { presenter: meta.name || 'Guest', isSelf: false, hasAudio: !!meta.screenHasAudio, peerId: sharing.id };
+    }
   }
   const others = state.participants.filter(p => !p.isSelf);
   const me = state.participants.find(p => p.isSelf);
@@ -2263,10 +2273,10 @@ function renderStage() {
     state.participants.filter(p => p.id !== state.pinned).forEach(p => tiles.push({ kind: 'p', p }));
   } else if (screen) {
     tiles.push({ kind: 'screen', screen });
-    // Include EVERY participant tile (camera) in the rail — the screen
-    // share is a separate stream, so we still want to see the sharer's
-    // face alongside their shared content.
-    others.forEach(p => tiles.push({ kind: 'p', p }));
+    // Skip the sharer's camera tile — their main stream is now showing the
+    // screen content (we swapped tracks in-place on the single PC), so
+    // duplicating it in the rail would show the same thing twice.
+    others.forEach(p => { if (p.id !== remoteScreenPeerId) tiles.push({ kind: 'p', p }); });
     tiles.push({ kind: 'p', p: me });
   } else {
     // Auto: include self in grid only if 5+ total; otherwise self pip
@@ -2368,14 +2378,15 @@ function renderStage() {
     const selfVid = document.getElementById('selfTileVideo');
     if (selfVid && !selfVid.srcObject) selfVid.srcObject = state.localStream;
   }
-  // Attach screen stream (self or remote)
+  // Attach screen stream: local from state.screenStream, remote from
+  // the peer's main RT.remoteStreams entry (we swapped tracks in-place).
   const sv = document.getElementById('screenVideo');
   if (sv) {
     const src = sv.dataset.screenSource;
     if (src === 'self' && state.screenStream) {
       if (sv.srcObject !== state.screenStream) sv.srcObject = state.screenStream;
-    } else if (src && src !== 'self' && RT.remoteScreens.has(src)) {
-      const rs = RT.remoteScreens.get(src);
+    } else if (src && src !== 'self' && RT.remoteStreams.has(src)) {
+      const rs = RT.remoteStreams.get(src);
       if (sv.srcObject !== rs) sv.srcObject = rs;
     }
   }
@@ -2508,7 +2519,12 @@ async function startScreenShare() {
     // Request audio: true so tab/system audio is captured (music, video, etc.)
     // Browser shows checkbox "Share tab audio" — user must enable it (only works for Chrome tabs).
     const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: { ideal: 30 }, cursor: 'always' },
+      video: {
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 30, max: 60 },
+        cursor: 'always',
+      },
       audio: {
         echoCancellation: false,
         noiseSuppression: false,
@@ -3069,17 +3085,30 @@ const RT = {
 // <video> autoplay quirks; this is the canonical WebRTC pattern).
 function attachRemoteAudio(key, stream) {
   if (!stream) return;
+  // The audio track for screen-share with-tab-audio can arrive LATER than the
+  // video track on the same stream. Listen for 'addtrack' so we wire audio
+  // even when the first call.on('stream') fired before audio was negotiated.
+  if (!stream.__mhAddtrackHooked) {
+    stream.__mhAddtrackHooked = true;
+    stream.addEventListener('addtrack', (ev) => {
+      console.info('[audio] stream addtrack', key, ev.track.kind, ev.track.readyState);
+      if (ev.track.kind === 'audio') attachRemoteAudio(key, stream);
+    });
+  }
   const audioTracks = stream.getAudioTracks();
+  console.info('[audio] attachRemoteAudio', key, { videoTracks: stream.getVideoTracks().length, audioTracks: audioTracks.length });
   if (!audioTracks.length) return;
   // Idempotent: if we already have an audio element for this peer, just
-  // point it at the latest stream (don't recreate — recreate causes audio
-  // pause/resume thrash when multiple call.on('stream') events fire).
+  // update its srcObject (don't recreate — that causes pause/resume thrash).
   if (RT.remoteAudios.has(key)) {
     const existing = RT.remoteAudios.get(key);
     if (existing.srcObject !== stream) {
       existing.srcObject = stream;
       const p = existing.play();
       if (p && p.catch) p.catch(() => showAudioUnblockBanner());
+    } else {
+      // Same stream, but maybe element is paused after a track-add — kick it
+      if (existing.paused) existing.play().catch(() => showAudioUnblockBanner());
     }
     rtAttachLevelMeter(key, stream);
     return;
@@ -3100,6 +3129,7 @@ function attachRemoteAudio(key, stream) {
     });
   }
   rtAttachLevelMeter(key, stream);
+  console.info('[audio] created <audio> element for', key);
 }
 
 // Per-peer Web Audio analyser. Drives a CSS variable on the participant tile
@@ -3359,8 +3389,40 @@ function rtSetupHandlers(localStream) {
   });
 }
 
+// Bump RTP sender bitrate so 1080p video isn't throttled by WebRTC defaults
+// (Chrome defaults to ~1.2 Mbps for video; 1080p wants ~3-4 Mbps).
+function rtBumpBitrate(call) {
+  if (!call?.peerConnection) return;
+  const senders = call.peerConnection.getSenders();
+  senders.forEach((s) => {
+    if (!s.track || !s.getParameters) return;
+    try {
+      const params = s.getParameters();
+      if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+      if (s.track.kind === 'video') {
+        params.encodings[0].maxBitrate = 4_000_000;
+        params.encodings[0].maxFramerate = 30;
+      } else if (s.track.kind === 'audio') {
+        params.encodings[0].maxBitrate = 128_000;
+      }
+      s.setParameters(params).catch((e) => console.warn('[RT] setParameters failed', e?.name || e));
+    } catch (e) { console.warn('[RT] bitrate bump failed', e); }
+  });
+}
+
 function rtWireCall(call, peerId) {
   const kind = call.metadata?.kind || 'main';
+  // Bump bitrate as soon as ICE is connected.
+  if (call.peerConnection) {
+    call.peerConnection.addEventListener('iceconnectionstatechange', () => {
+      if (call.peerConnection.iceConnectionState === 'connected' ||
+          call.peerConnection.iceConnectionState === 'completed') {
+        rtBumpBitrate(call);
+      }
+    });
+    // Also try once after a delay, in case the listener missed the transition.
+    setTimeout(() => rtBumpBitrate(call), 1500);
+  }
   call.on('stream', (stream) => {
     if (kind === 'screen') {
       RT.remoteScreens.set(peerId, stream);
@@ -3524,27 +3586,77 @@ function rtPlaceMainCall(remoteId) {
   } catch (e) { console.warn('[RT] placeMainCall failed', remoteId, e); }
 }
 
-// Open a separate one-way MediaConnection for the screen share to every peer.
-// The main camera+mic call stays untouched — so remote peers see BOTH our
-// face (in their small rail tile) AND our shared screen (in the big tile).
-function rtStartScreenShareToAll(screenStream) {
-  rtBroadcast({ type: 'screen-state', sharing: true, hasAudio: screenStream.getAudioTracks().length > 0 });
-  rtBroadcastMeta();
-  RT.conns.forEach((_, peerId) => {
-    if (RT.screenCalls.has(peerId)) return;
-    try {
-      const call = RT.peer.call(peerId, screenStream, { metadata: { kind: 'screen' } });
-      RT.screenCalls.set(peerId, call);
-      rtWireCall(call, peerId);
-      console.info('[RT] screen-call placed →', peerId);
-    } catch (e) { console.warn('[RT] screen call failed', peerId, e); }
-  });
+// A small persistent fake video track. Used as a placeholder when the user
+// joins without camera permission, so the main RTCPeerConnection still has
+// a video sender we can later swap to the screen track via replaceTrack().
+let __fakeVideoTrack = null;
+function rtGetFakeVideoTrack() {
+  if (__fakeVideoTrack && __fakeVideoTrack.readyState === 'live') return __fakeVideoTrack;
+  const canvas = document.createElement('canvas');
+  canvas.width = 320; canvas.height = 240;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#0a0e1a'; ctx.fillRect(0, 0, 320, 240);
+  // Animate every second so the encoder keeps producing keyframes (some
+  // browsers stop emitting frames on a completely static canvas).
+  setInterval(() => {
+    if (!__fakeVideoTrack || __fakeVideoTrack.readyState !== 'live') return;
+    ctx.fillStyle = '#0a0e1a'; ctx.fillRect(0, 0, 320, 240);
+    ctx.fillStyle = `rgba(255,255,255,0.01)`;
+    ctx.fillRect(Math.random() * 320, Math.random() * 240, 1, 1);
+  }, 1000);
+  const stream = canvas.captureStream(2);
+  __fakeVideoTrack = stream.getVideoTracks()[0];
+  return __fakeVideoTrack;
 }
 
-// Close all screen-share calls. The main camera+mic calls are untouched.
+// Replace tracks on every main RTCPeerConnection with the screen-share tracks.
+// Pattern used by Google Meet on mobile, Zoom, Discord — single PC per peer,
+// just swap the track content. Far more reliable than a second concurrent
+// MediaConnection (which often fails on mobile / strict NAT). Trade-off: the
+// remote peer sees the screen on the tile that used to show our camera.
+function rtStartScreenShareToAll(screenStream) {
+  const screenVideo = screenStream.getVideoTracks()[0];
+  const screenAudio = screenStream.getAudioTracks()[0];
+  rtBroadcast({ type: 'screen-state', sharing: true, hasAudio: !!screenAudio });
+  rtBroadcastMeta();
+  let count = 0;
+  RT.calls.forEach((call, peerId) => {
+    try {
+      const senders = call.peerConnection.getSenders();
+      let vSender = senders.find(s => s.kind === 'video' || (s.track && s.track.kind === 'video'));
+      if (!vSender) {
+        // Track-less video sender exists from negotiation; if not, addTrack.
+        try { vSender = call.peerConnection.addTrack(screenVideo, screenStream); } catch (e) {}
+      }
+      if (vSender && screenVideo && typeof vSender.replaceTrack === 'function') {
+        vSender.replaceTrack(screenVideo).catch((e) => console.warn('[RT] video swap failed', peerId, e));
+      }
+      if (screenAudio) {
+        const aSender = senders.find(s => s.track && s.track.kind === 'audio');
+        if (aSender) aSender.replaceTrack(screenAudio).catch((e) => console.warn('[RT] audio swap failed', peerId, e));
+      }
+      count++;
+    } catch (e) { console.warn('[RT] track swap failed for', peerId, e); }
+  });
+  console.info('[RT] screen-share active', { peers: count, hasAudio: !!screenAudio });
+}
+
+// Restore camera + mic tracks on every main RTCPeerConnection.
 function rtStopScreenShareToAll() {
-  RT.screenCalls.forEach(c => { try { c.close(); } catch {} });
-  RT.screenCalls.clear();
+  if (state.localStream) {
+    const camTrack = state.localStream.getVideoTracks()[0];
+    const micTrack = state.localStream.getAudioTracks()[0];
+    RT.calls.forEach((call, peerId) => {
+      try {
+        const senders = call.peerConnection.getSenders();
+        const vSender = senders.find(s => s.track && s.track.kind === 'video');
+        if (vSender && camTrack) vSender.replaceTrack(camTrack).catch(() => {});
+        else if (vSender && !camTrack) vSender.replaceTrack(rtGetFakeVideoTrack()).catch(() => {});
+        const aSender = senders.find(s => s.track && s.track.kind === 'audio');
+        if (aSender && micTrack) aSender.replaceTrack(micTrack).catch(() => {});
+      } catch (e) { console.warn('[RT] track restore failed for', peerId, e); }
+    });
+  }
   rtBroadcast({ type: 'screen-state', sharing: false });
   rtBroadcastMeta();
 }
