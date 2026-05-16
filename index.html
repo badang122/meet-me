@@ -600,6 +600,30 @@ input, textarea, select { font-family: inherit; color: inherit; }
 }
 .tile.speaking { border-color: var(--blue); box-shadow: 0 0 0 4px rgba(138,180,248,.15); }
 .tile.pinned { border-color: var(--purple); }
+/* Live audio level — shows a green outline that pulses with incoming audio.
+   Driven by --peer-level (0..1) set per-tile by the Web Audio analyser. */
+.tile::after {
+  content: ''; position: absolute; inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: 0 0 0 calc(var(--peer-level, 0) * 6px) rgba(52, 211, 153, calc(var(--peer-level, 0) * 0.7));
+  transition: box-shadow .08s linear;
+  z-index: 3;
+}
+/* Audio-arriving dot indicator inside the tile name pill */
+.audio-live-dot {
+  display: inline-block;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--muted-2);
+  margin-left: 4px;
+  transition: background .15s, box-shadow .15s, transform .12s;
+}
+.tile[style*="--peer-level"] .audio-live-dot {
+  background: var(--green);
+  box-shadow: 0 0 calc(var(--peer-level, 0) * 8px) calc(var(--peer-level, 0) * 4px) rgba(52, 211, 153, .6);
+  transform: scale(calc(1 + var(--peer-level, 0) * 0.5));
+}
 .tile video, .tile canvas {
   width: 100%; height: 100%;
   object-fit: cover;
@@ -2240,6 +2264,7 @@ function renderStage() {
           ${p.micOn
             ? `<span class="mic-on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/></svg></span>`
             : `<span style="color:var(--red);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/></svg></span>`}
+          ${p.isSelf ? '' : '<span class="audio-live-dot" title="Audio arriving from this peer"></span>'}
         </div>
         <div class="tile-badges">
           ${p.hand ? `<div class="tile-badge hand"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M18 9V6a2 2 0 0 0-4 0v3M14 9V4a2 2 0 0 0-4 0v5M10 9V6a2 2 0 0 0-4 0v9c0 4 3 7 7 7s7-3 7-7v-3"/></svg></div>` : ''}
@@ -2969,6 +2994,7 @@ function attachRemoteAudio(key, stream) {
       const p = existing.play();
       if (p && p.catch) p.catch(() => showAudioUnblockBanner());
     }
+    rtAttachLevelMeter(key, stream);
     return;
   }
   const el = document.createElement('audio');
@@ -2986,6 +3012,43 @@ function attachRemoteAudio(key, stream) {
       showAudioUnblockBanner();
     });
   }
+  rtAttachLevelMeter(key, stream);
+}
+
+// Per-peer Web Audio analyser. Drives a CSS variable on the participant tile
+// that pulses an outline when actual audio is arriving — gives visible proof
+// that the remote stream is alive and unmuted.
+RT.audioAnalysers = RT.audioAnalysers || new Map();
+function rtAttachLevelMeter(key, stream) {
+  if (RT.audioAnalysers.has(key)) return;
+  const audioTracks = stream.getAudioTracks();
+  if (!audioTracks.length) return;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = ctx.createMediaStreamSource(new MediaStream(audioTracks));
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    src.connect(analyser);
+    RT.audioAnalysers.set(key, { ctx, analyser });
+    const buf = new Uint8Array(analyser.frequencyBinCount);
+    function tick() {
+      if (!RT.audioAnalysers.has(key)) return;
+      analyser.getByteFrequencyData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i];
+      const level = Math.min(1, (sum / buf.length / 255) * 6);
+      const tile = document.querySelector(`.tile[data-id="${CSS.escape(key)}"]`);
+      if (tile) tile.style.setProperty('--peer-level', level.toFixed(2));
+      requestAnimationFrame(tick);
+    }
+    tick();
+  } catch (e) { console.warn('[audio] analyser failed for', key, e); }
+}
+function rtDetachLevelMeter(key) {
+  const entry = RT.audioAnalysers.get(key);
+  if (!entry) return;
+  try { entry.ctx.close(); } catch {}
+  RT.audioAnalysers.delete(key);
 }
 
 // Retry all paused remote audios on ANY user interaction — covers the case
@@ -3139,10 +3202,9 @@ function rtJoinAsClient(hostId, localStream) {
       RT.conns.set(hostId, conn);
       conn.on('open', () => {
         try { conn.send({ type: 'hello', meta: rtLocalMeta() }); } catch {}
-        // Convention: peer with lexicographically smaller ID initiates the
-        // media call. Avoids duplicate RTCPeerConnections (which cause audio
-        // stream-event thrash and double-pipe overhead).
-        if (RT.peer.id < hostId) rtPlaceMainCall(hostId);
+        // Joiner always initiates the media call to host. Mirror of the
+        // canonical PeerJS pattern from their docs.
+        rtPlaceMainCall(hostId);
       });
       conn.on('data', (msg) => rtHandleData(hostId, msg));
       conn.on('close', () => rtHandlePeerLeft(hostId));
@@ -3176,10 +3238,9 @@ function rtSetupHandlers(localStream) {
         const list = others.map(pid => ({ id: pid, meta: RT.remoteMeta.get(pid) || null }));
         conn.send({ type: 'peer-list', peers: list });
       }
-      // Only initiate the media call if my ID is lex-smaller than theirs.
-      // Otherwise we'd both initiate, creating duplicate PeerConnections
-      // and racy on('stream') events on the receiver.
-      if (RT.peer.id < id) rtPlaceMainCall(id);
+      // Convention: the side that OPENED the data conn (the connector) is
+      // also the one that places the media call. We're on the listener side
+      // here, so we wait. The connector's call will trigger our peer.on('call').
     });
     conn.on('data', (msg) => rtHandleData(id, msg));
     conn.on('close', () => rtHandlePeerLeft(id));
@@ -3242,7 +3303,9 @@ function rtHandleData(peerId, msg) {
         RT.conns.set(id, conn);
         conn.on('open', () => {
           conn.send({ type: 'hello', meta: rtLocalMeta() });
-          if (RT.peer.id < id) rtPlaceMainCall(id);
+          // I'm the connector here (initiating to a peer from peer-list),
+          // so I place the media call.
+          rtPlaceMainCall(id);
         });
         conn.on('data', (m) => rtHandleData(id, m));
         conn.on('close', () => rtHandlePeerLeft(id));
@@ -3298,6 +3361,8 @@ function rtHandlePeerLeft(peerId) {
   RT.remoteMeta.delete(peerId);
   detachRemoteAudio(peerId);
   detachRemoteAudio(`screen:${peerId}`);
+  rtDetachLevelMeter(peerId);
+  rtDetachLevelMeter(`screen:${peerId}`);
   rtRefreshParticipants();
   renderStage();
   toast(`${name} left`);
