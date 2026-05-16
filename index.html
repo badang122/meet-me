@@ -2864,7 +2864,7 @@ function renderPanel() {
         <div class="av-md" style="background: linear-gradient(135deg, ${p.color}, #f472b6);">${p.initials}<span class="speaking-dot"></span></div>
         <div class="info">
           <div class="name">${Meet.escapeHtml(p.name)}${p.isSelf ? ' (You)' : ''}</div>
-          <div class="role">${p.isSelf ? 'Host' : 'Participant'}</div>
+          <div class="role">${p.isSelf ? (RT.isHost ? 'Host' : 'You') : 'Participant'}</div>
         </div>
         <div class="status-icons">
           ${p.hand ? '<span class="hand-up" title="Hand raised"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M18 9V6a2 2 0 0 0-4 0v3M14 9V4a2 2 0 0 0-4 0v5M10 9V6a2 2 0 0 0-4 0v9c0 4 3 7 7 7s7-3 7-7v-3"/></svg></span>' : ''}
@@ -3311,6 +3311,7 @@ async function rtConnect(code, localStream) {
       if (settled) return; settled = true;
       RT.peer = tryAsHost; RT.isHost = true; RT.mode = 'connected';
       rtSetupHandlers(localStream);
+      rtStartKeepAlive();
       console.info('[RT] host', id);
       resolve({ ok: true, isHost: true, peerId: id });
     };
@@ -3355,6 +3356,7 @@ function rtJoinAsClient(hostId, localStream) {
       // P2P conn/call setup happens asynchronously and is best-effort.
       RT.peer = peer; RT.isHost = false; RT.mode = 'connected';
       rtSetupHandlers(localStream);
+      rtStartKeepAlive();
 
       // Open data + media to host
       const conn = peer.connect(hostId, { reliable: true, metadata: { meta: rtLocalMeta() } });
@@ -3435,12 +3437,64 @@ function rtSetupHandlers(localStream) {
   });
   RT.peer.on('disconnected', () => {
     console.warn('[RT] disconnected from signaling — attempting reconnect');
-    try { RT.peer.reconnect(); } catch {}
+    toast('Reconnecting…');
+    // Retry reconnects: PeerJS sometimes drops one quietly, especially when
+    // the tab was backgrounded. Try a few times, then refuse to give up.
+    let attempts = 0;
+    const tryRec = () => {
+      if (!RT.peer || RT.peer.destroyed) return;
+      if (!RT.peer.disconnected) { toast('Reconnected'); return; }
+      attempts++;
+      try { RT.peer.reconnect(); } catch (e) { console.warn('[RT] reconnect err', e); }
+      if (attempts < 8) setTimeout(tryRec, 2000 + attempts * 500);
+      else toast('Still offline — try refreshing the page');
+    };
+    setTimeout(tryRec, 500);
   });
   RT.peer.on('error', (err) => {
-    console.warn('[RT] peer error', err);
+    console.warn('[RT] peer error', err?.type || err?.message || err);
   });
 }
+
+// ---- Keep-alive ----
+// Browsers throttle WebSocket / WebRTC pings on background tabs. PeerJS
+// then quietly disconnects, and the host's `mh-<code>` ID becomes claimable
+// by the next joiner — making them think THEY are the host with no peers.
+// We mitigate by pinging through the data channels every 15s while in a
+// meeting; that keeps the underlying ICE/DTLS keep-alives active even
+// without the browser's own timer.
+RT.keepAlive = RT.keepAlive || null;
+function rtStartKeepAlive() {
+  if (RT.keepAlive) return;
+  RT.keepAlive = setInterval(() => {
+    if (!RT.peer || RT.peer.destroyed) return;
+    RT.conns.forEach((conn) => {
+      try { if (conn && conn.open) conn.send({ type: 'ping', t: Date.now() }); } catch {}
+    });
+  }, 15000);
+}
+function rtStopKeepAlive() {
+  if (RT.keepAlive) { clearInterval(RT.keepAlive); RT.keepAlive = null; }
+}
+
+// When the tab becomes visible again after being hidden, verify our peer
+// is still alive on PeerJS. If not, force a reconnect.
+let __mhVisibilityHooked = false;
+function ensureVisibilityRecovery() {
+  if (__mhVisibilityHooked) return;
+  __mhVisibilityHooked = true;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    if (!RT.peer || RT.peer.destroyed) return;
+    if (RT.peer.disconnected) {
+      console.info('[RT] tab visible — peer was disconnected, reconnecting');
+      try { RT.peer.reconnect(); } catch {}
+    }
+    // Re-bump bitrate too in case background throttling lowered it
+    rtRebumpAll();
+  });
+}
+ensureVisibilityRecovery();
 
 // Adaptive per-peer bitrate: more peers ⇒ less bandwidth per peer, so the
 // mesh stays usable even with many participants. This is what Google Meet
@@ -3523,6 +3577,9 @@ function rtWireCall(call, peerId) {
 
 function rtHandleData(peerId, msg) {
   if (!msg || typeof msg !== 'object') return;
+  // Keep-alive ping — no action needed, just receiving it is enough to
+  // keep the data channel and underlying ICE/DTLS heartbeat alive.
+  if (msg.type === 'ping') return;
   switch (msg.type) {
     case 'hello':
     case 'meta':
@@ -3755,6 +3812,7 @@ function rtReplaceLocalTracks(stream) {
 }
 
 function rtDisconnect() {
+  rtStopKeepAlive();
   RT.calls.forEach(c => { try { c.close(); } catch {} });
   RT.screenCalls.forEach(c => { try { c.close(); } catch {} });
   RT.conns.forEach(c => { try { c.close(); } catch {} });
