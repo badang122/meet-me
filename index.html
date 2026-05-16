@@ -473,6 +473,81 @@ input, textarea, select { font-family: inherit; color: inherit; }
   transition: transform .12s, box-shadow .15s;
 }
 .btn-join-big:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(167,139,250,.50); }
+.share-box {
+  margin-top: 28px;
+  padding: 16px 18px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  max-width: 460px;
+}
+.share-box-label {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.share-box-label svg { width: 14px; height: 14px; color: var(--blue); }
+.share-box-row {
+  display: flex; align-items: stretch; gap: 8px;
+}
+.share-box-row input {
+  flex: 1;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 13px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12.5px;
+  color: var(--text);
+  outline: none;
+  cursor: text;
+  user-select: all;
+  transition: border-color .15s;
+}
+.share-box-row input:focus { border-color: var(--blue); }
+.share-copy {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--gradient);
+  color: white;
+  padding: 0 16px;
+  font-size: 13px; font-weight: 600;
+  border-radius: 10px;
+  white-space: nowrap;
+  box-shadow: 0 3px 10px rgba(167,139,250,.32), inset 0 1px 0 rgba(255,255,255,.18);
+  transition: transform .12s, filter .12s;
+}
+.share-copy:hover { transform: translateY(-1px); }
+.share-copy:active { transform: translateY(0); }
+.share-copy.copied { filter: hue-rotate(80deg) saturate(0.8); }
+.share-box-hint {
+  font-size: 11.5px; color: var(--muted);
+  margin-top: 10px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.share-box-hint span {
+  background: rgba(148,163,184,.10);
+  padding: 1px 6px; border-radius: 4px;
+  color: var(--text-dim);
+}
+
+/* In-meeting share button */
+.meet-share-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--surface);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  padding: 7px 12px;
+  border-radius: 100px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.meet-share-btn:hover { background: var(--surface-3); border-color: var(--border-strong); color: white; }
+.meet-share-btn svg { width: 13px; height: 13px; }
+
 .lobby-info .device-row {
   margin-top: 24px;
   display: flex; flex-direction: column; gap: 10px;
@@ -1338,10 +1413,6 @@ input, textarea, select { font-family: inherit; color: inherit; }
     </div>
     <div class="lobby-info">
       <h2 class="ready" id="lobbyReady">Ready to join?</h2>
-      <div class="code-row">
-        <span>Meeting code</span>
-        <span class="code-pill" id="lobbyCode">—</span>
-      </div>
       <div class="who" id="lobbyWho">No one else has joined yet</div>
       <input class="name-input" id="lobbyName" type="text" placeholder="Your name" maxlength="32">
       <div class="lobby-actions">
@@ -1351,6 +1422,22 @@ input, textarea, select { font-family: inherit; color: inherit; }
           Present
         </button>
       </div>
+
+      <div class="share-box" id="lobbyShareBox">
+        <div class="share-box-label">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7 0l4-4a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-4 4a5 5 0 0 0 7 7l1-1"/></svg>
+          Share this link to invite people
+        </div>
+        <div class="share-box-row">
+          <input id="lobbyShareUrl" type="text" readonly>
+          <button class="share-copy" id="lobbyCopyBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <span id="lobbyCopyLabel">Copy</span>
+          </button>
+        </div>
+        <div class="share-box-hint">Anyone with the link can join. Code: <span id="lobbyCode">—</span></div>
+      </div>
+
       <div class="device-row">
         <label>Microphone <select id="micSelect"></select></label>
         <label>Camera <select id="camSelect"></select></label>
@@ -1364,10 +1451,14 @@ input, textarea, select { font-family: inherit; color: inherit; }
   <div class="meet-topbar">
     <div class="left">
       <div class="timer" id="meetTimer">00:00</div>
-      <div class="info-pill" id="meetInfoPill">
+      <div class="info-pill" id="meetInfoPill" title="Click to copy invite link">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
         <span id="meetCodeLabel">—</span>
       </div>
+      <button class="meet-share-btn" id="meetShareBtn" title="Copy invite link">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7 0l4-4a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-4 4a5 5 0 0 0 7 7l1-1"/></svg>
+        <span id="meetShareLabel">Copy link</span>
+      </button>
     </div>
     <div class="right">
       <div class="net" title="Network: Good">
@@ -1749,9 +1840,10 @@ newDrop.querySelectorAll('[data-action]').forEach(el => {
     if (act === 'instant') enterLobby(Meet.code());
     if (act === 'copy-link') {
       const code = Meet.code();
-      const link = `${location.origin}${location.pathname}?code=${code}`;
-      navigator.clipboard?.writeText(link).then(() => toast('Meeting link copied'));
+      copyShareUrl(code);
       addRecent(code);
+      // Also enter the lobby so the host previews camera + can click Join
+      enterLobby(code);
     }
     if (act === 'schedule') {
       toast('Schedule UI lives in the dashboard');
@@ -1772,16 +1864,70 @@ document.addEventListener('click', (e) => {
 });
 
 /* ---------- LOBBY ---------- */
+function buildShareUrl(code) {
+  return `${location.origin}${location.pathname}?code=${code}`;
+}
+
 async function enterLobby(code) {
   state.meeting = { code, joinedAt: null };
   setView('lobby');
   document.getElementById('lobbyCode').textContent = code;
+  document.getElementById('lobbyShareUrl').value = buildShareUrl(code);
+  document.getElementById('lobbyCopyLabel').textContent = 'Copy';
+  document.getElementById('lobbyCopyBtn').classList.remove('copied');
   document.getElementById('lobbyName').value = state.user.name === 'You' ? '' : state.user.name;
   document.getElementById('lobbyAvatar').textContent = Meet.initials(state.user.name || 'You');
   document.getElementById('lobbyPreviewName').textContent = state.user.name || 'You';
   await initLobbyMedia();
   await populateDevices();
 }
+
+async function copyShareUrl(code, opts = {}) {
+  const url = buildShareUrl(code);
+  let ok = false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(url);
+      ok = true;
+    } else {
+      // Fallback: create a hidden input and execCommand('copy')
+      const ta = document.createElement('textarea');
+      ta.value = url; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      ok = document.execCommand('copy');
+      ta.remove();
+    }
+  } catch (e) { ok = false; }
+  if (ok && !opts.silent) toast('Invite link copied — share it to invite');
+  return ok;
+}
+
+document.getElementById('lobbyCopyBtn').addEventListener('click', async () => {
+  if (!state.meeting) return;
+  const ok = await copyShareUrl(state.meeting.code);
+  if (ok) {
+    const lbl = document.getElementById('lobbyCopyLabel');
+    const btn = document.getElementById('lobbyCopyBtn');
+    lbl.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { lbl.textContent = 'Copy'; btn.classList.remove('copied'); }, 1800);
+  }
+});
+document.getElementById('lobbyShareUrl').addEventListener('click', (e) => e.target.select());
+
+// In-meeting: top bar code pill + share button both copy the invite link
+document.getElementById('meetInfoPill').addEventListener('click', () => {
+  if (state.meeting) copyShareUrl(state.meeting.code);
+});
+document.getElementById('meetShareBtn').addEventListener('click', async () => {
+  if (!state.meeting) return;
+  const ok = await copyShareUrl(state.meeting.code);
+  if (ok) {
+    const lbl = document.getElementById('meetShareLabel');
+    lbl.textContent = 'Copied!';
+    setTimeout(() => { lbl.textContent = 'Copy link'; }, 1800);
+  }
+});
 
 async function initLobbyMedia() {
   const stream = await startLocalMedia({ video: state.camOn, audio: true });
@@ -1936,7 +2082,13 @@ async function joinMeeting() {
   // Connect to signaling for real WebRTC mesh
   const rt = await rtConnect(state.meeting.code, state.localStream);
   if (rt.ok) {
-    toast(rt.isHost ? 'Meeting started — share the link to invite' : 'Connected to meeting');
+    if (rt.isHost) {
+      // Auto-copy invite link so host can paste straight into a chat/DM
+      const copied = await copyShareUrl(state.meeting.code, { silent: true });
+      toast(copied ? 'Meeting started — invite link copied to clipboard' : 'Meeting started — click "Copy link" to invite');
+    } else {
+      toast('Connected to meeting');
+    }
     rtRefreshParticipants();
   } else {
     // Fallback to demo mode if signaling unreachable
