@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Tests · Meet + Dashboard</title>
+<style>
+* { box-sizing: border-box; }
+body {
+  background: #0e1116; color: #f1f3f4;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  padding: 30px 40px; margin: 0;
+}
+h1 { font-size: 22px; font-weight: 700; margin: 0 0 6px; }
+h1 .gtext {
+  background: linear-gradient(135deg, #818cf8, #a78bfa, #f472b6);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.summary {
+  background: #1c2027; padding: 14px 18px; border-radius: 10px;
+  margin-bottom: 20px; border: 1px solid rgba(255,255,255,.08);
+  font-size: 13.5px;
+}
+.summary strong { font-size: 16px; }
+.summary .pass { color: #34d399; }
+.summary .fail { color: #f87171; }
+.group { margin-bottom: 22px; }
+.group h2 {
+  font-size: 13px; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; color: #94a3b8;
+  margin: 0 0 8px;
+}
+.test {
+  padding: 8px 14px;
+  background: #15181f; border: 1px solid rgba(255,255,255,.06);
+  border-radius: 8px; margin-bottom: 4px;
+  display: flex; align-items: center; gap: 10px;
+  font-size: 13px;
+}
+.test.pass { border-left: 3px solid #34d399; }
+.test.fail { border-left: 3px solid #f87171; background: rgba(248,113,113,.06); }
+.test .badge { font-weight: 700; font-size: 11px; }
+.test.pass .badge { color: #34d399; }
+.test.fail .badge { color: #f87171; }
+.test .name { flex: 1; }
+.test .why { font-size: 11.5px; color: #f87171; margin-top: 4px; display: block; }
+a { color: #818cf8; }
+.actions { margin-top: 24px; padding-top: 18px; border-top: 1px solid rgba(255,255,255,.08); }
+button {
+  background: linear-gradient(135deg, #818cf8, #f472b6);
+  color: white; border: none; padding: 8px 14px;
+  font-family: inherit; font-size: 13px; font-weight: 600;
+  border-radius: 8px; cursor: pointer; margin-right: 8px;
+}
+button:hover { transform: translateY(-1px); }
+</style>
+</head>
+<body>
+<h1><span class="gtext">Tests</span> · Meet + Dashboard</h1>
+<p style="color:#94a3b8;margin:0 0 18px;">Pure-function unit tests for the utility layers. Loads both apps in hidden iframes, exercises their exported helpers, and reports pass/fail.</p>
+<div id="summary" class="summary">Running…</div>
+<div id="results"></div>
+
+<div class="actions">
+  <button onclick="run()">Re-run</button>
+  <a href="index.html">← Back to Meet</a>
+  &nbsp;·&nbsp;
+  <a href="dashboard.html">Open dashboard →</a>
+</div>
+
+<iframe id="frameMeet" src="index.html" style="display:none;"></iframe>
+<iframe id="frameDash" src="dashboard.html" style="display:none;"></iframe>
+
+<script>
+const results = [];
+function assert(group, name, fn) {
+  let pass = false, why = '';
+  try {
+    const out = fn();
+    if (out === false) { pass = false; why = 'returned false'; }
+    else pass = true;
+  } catch (e) {
+    pass = false; why = String(e?.message || e);
+  }
+  results.push({ group, name, pass, why });
+}
+
+function eq(a, b) {
+  if (a === b) return true;
+  if (typeof a === 'object' && typeof b === 'object') return JSON.stringify(a) === JSON.stringify(b);
+  return false;
+}
+
+function render() {
+  const groups = {};
+  results.forEach(r => { (groups[r.group] = groups[r.group] || []).push(r); });
+  const passCount = results.filter(r => r.pass).length;
+  const failCount = results.length - passCount;
+  document.getElementById('summary').innerHTML = `
+    <strong>${results.length}</strong> tests · <span class="pass">${passCount} passing</span>${failCount ? ` · <span class="fail">${failCount} failing</span>` : ''}
+  `;
+  document.getElementById('results').innerHTML = Object.entries(groups).map(([g, tests]) => `
+    <div class="group">
+      <h2>${g}</h2>
+      ${tests.map(t => `
+        <div class="test ${t.pass ? 'pass' : 'fail'}">
+          <span class="badge">${t.pass ? 'PASS' : 'FAIL'}</span>
+          <span class="name">${t.name}${t.why ? `<span class="why">→ ${t.why}</span>` : ''}</span>
+        </div>
+      `).join('')}
+    </div>
+  `).join('');
+}
+
+async function frameReady(id) {
+  return new Promise((resolve) => {
+    const f = document.getElementById(id);
+    if (f.contentWindow && f.contentWindow.Meet || f.contentWindow.MH) return resolve(f.contentWindow);
+    f.addEventListener('load', () => setTimeout(() => resolve(f.contentWindow), 200), { once: true });
+  });
+}
+
+async function run() {
+  results.length = 0;
+  document.getElementById('summary').textContent = 'Running…';
+  document.getElementById('results').innerHTML = '';
+
+  // Reload both frames
+  const f1 = document.getElementById('frameMeet');
+  const f2 = document.getElementById('frameDash');
+  f1.src = 'index.html?test=1';
+  f2.src = 'dashboard.html?test=1';
+
+  await new Promise(r => setTimeout(r, 400));
+  const Meet = (await frameReady('frameMeet')).Meet;
+  const MH = (await frameReady('frameDash')).MH;
+
+  /* ===== Meet utilities ===== */
+  assert('Meet · uid', 'returns unique strings', () => {
+    const a = Meet.uid(), b = Meet.uid();
+    return a !== b && a.startsWith('u_') && a.length > 5;
+  });
+
+  assert('Meet · code', 'format aaa-bbbb-ccc', () => /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/.test(Meet.code()));
+  assert('Meet · code', 'lowercase only', () => /^[a-z-]+$/.test(Meet.code()));
+  assert('Meet · code', 'unique across runs', () => {
+    const set = new Set(Array.from({length: 50}, () => Meet.code()));
+    return set.size === 50;
+  });
+
+  assert('Meet · initials', 'single name uses first 2 letters', () => eq(Meet.initials('Alice'), 'AL'));
+  assert('Meet · initials', 'two-part name uses first letters', () => eq(Meet.initials('Alex Chen'), 'AC'));
+  assert('Meet · initials', 'three-part uses first + last', () => eq(Meet.initials('Mary Jane Watson'), 'MW'));
+  assert('Meet · initials', 'empty returns ?', () => eq(Meet.initials(''), '?'));
+  assert('Meet · initials', 'null returns ?', () => eq(Meet.initials(null), '?'));
+
+  assert('Meet · pad2', 'pads single digit', () => eq(Meet.pad2(5), '05'));
+  assert('Meet · pad2', 'leaves double digit', () => eq(Meet.pad2(42), '42'));
+
+  assert('Meet · fmtDuration', 'sub-hour mm:ss', () => eq(Meet.fmtDuration(125), '02:05'));
+  assert('Meet · fmtDuration', 'hour h:mm:ss', () => eq(Meet.fmtDuration(3725), '1:02:05'));
+  assert('Meet · fmtDuration', 'zero', () => eq(Meet.fmtDuration(0), '00:00'));
+
+  assert('Meet · fmtClock', '12-hour AM/PM', () => {
+    const d = new Date(); d.setHours(14, 30, 0, 0);
+    return Meet.fmtClock(d) === '2:30 PM';
+  });
+  assert('Meet · fmtClock', 'midnight is 12 AM', () => {
+    const d = new Date(); d.setHours(0, 5, 0, 0);
+    return Meet.fmtClock(d) === '12:05 AM';
+  });
+  assert('Meet · fmtClock', 'noon is 12 PM', () => {
+    const d = new Date(); d.setHours(12, 0, 0, 0);
+    return Meet.fmtClock(d) === '12:00 PM';
+  });
+
+  assert('Meet · escapeHtml', 'escapes lt/gt/amp', () => eq(Meet.escapeHtml('<a> & </a>'), '&lt;a&gt; &amp; &lt;/a&gt;'));
+  assert('Meet · escapeHtml', 'escapes quotes', () => eq(Meet.escapeHtml('say "hi" don\'t'), 'say &quot;hi&quot; don&#39;t'));
+  assert('Meet · escapeHtml', 'null safe', () => eq(Meet.escapeHtml(null), ''));
+
+  /* ===== Meet storage ===== */
+  assert('Meet · store', 'load returns object', () => typeof Meet.loadStore() === 'object');
+  assert('Meet · store', 'save then load roundtrips', () => {
+    const before = Meet.loadStore();
+    Meet.saveStore({ ...before, _testFlag: 'xyz' });
+    const after = Meet.loadStore();
+    Meet.saveStore(before);
+    return after._testFlag === 'xyz';
+  });
+
+  /* ===== Dashboard (MH) utilities ===== */
+  assert('Dashboard · pad2', 'pads single digit', () => eq(MH.pad2(3), '03'));
+  assert('Dashboard · iso', 'YYYY-MM-DD format', () => /^\d{4}-\d{2}-\d{2}$/.test(MH.iso(new Date())));
+
+  assert('Dashboard · parseTime', 'parses HH:MM to minutes', () => eq(MH.parseTime('09:30'), 570));
+  assert('Dashboard · parseTime', 'midnight is 0', () => eq(MH.parseTime('00:00'), 0));
+  assert('Dashboard · minutesToHHMM', 'roundtrip 9:30', () => eq(MH.minutesToHHMM(570), '09:30'));
+
+  assert('Dashboard · fmtTime', '14:30 to 2:30 PM', () => eq(MH.fmtTime('14:30'), '2:30 PM'));
+  assert('Dashboard · fmtTime', '00:00 to 12:00 AM', () => eq(MH.fmtTime('00:00'), '12:00 AM'));
+  assert('Dashboard · fmtTime', '12:00 to 12:00 PM', () => eq(MH.fmtTime('12:00'), '12:00 PM'));
+
+  assert('Dashboard · duration', '10:00 to 11:15 = 75 min', () => eq(MH.duration('10:00', '11:15'), 75));
+  assert('Dashboard · duration', 'same start/end = 0', () => eq(MH.duration('10:00', '10:00'), 0));
+
+  assert('Dashboard · initials', 'single word first 2', () => eq(MH.initials('Alice'), 'AL'));
+  assert('Dashboard · initials', 'two words first letters', () => eq(MH.initials('Alex Chen'), 'AC'));
+
+  assert('Dashboard · escapeHtml', 'escapes correctly', () => eq(MH.escapeHtml('<x>'), '&lt;x&gt;'));
+
+  assert('Dashboard · startOfWeek', 'Monday start', () => {
+    // Wed Mar 5 2025 → Mon Mar 3 2025
+    const wed = new Date('2025-03-05T12:00:00');
+    const mon = MH.startOfWeek(wed);
+    return mon.getDay() === 1 && mon.getDate() === 3;
+  });
+  assert('Dashboard · startOfWeek', 'Sunday → previous Monday', () => {
+    const sun = new Date('2025-03-09T12:00:00');
+    const mon = MH.startOfWeek(sun);
+    return mon.getDay() === 1 && mon.getDate() === 3;
+  });
+
+  assert('Dashboard · addDays', 'positive offset', () => {
+    const d = MH.addDays(new Date('2025-03-05T12:00:00'), 3);
+    return d.getDate() === 8;
+  });
+  assert('Dashboard · addDays', 'negative offset', () => {
+    const d = MH.addDays(new Date('2025-03-05T12:00:00'), -5);
+    return d.getDate() === 28 && d.getMonth() === 1; // Feb
+  });
+
+  assert('Dashboard · uid', 'unique', () => {
+    const set = new Set(Array.from({length: 100}, () => MH.uid()));
+    return set.size === 100;
+  });
+
+  assert('Dashboard · storage', 'save/load roundtrip', () => {
+    const a = MH.load();
+    const flag = { _t: 'xyz' };
+    MH.save(flag);
+    const b = MH.load();
+    if (a) MH.save(a);
+    return b && b._t === 'xyz';
+  });
+
+  /* ===== Cross checks ===== */
+  assert('Cross-app', 'both expose same initials algorithm', () => Meet.initials('Sarah Kim') === MH.initials('Sarah Kim'));
+  assert('Cross-app', 'both pad correctly', () => Meet.pad2(7) === MH.pad2(7));
+
+  render();
+}
+
+run();
+</script>
+</body>
+</html>

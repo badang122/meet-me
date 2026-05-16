@@ -1,0 +1,2095 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meeting Hub — Your meetings, on lock</title>
+<meta name="description" content="A focused, beautiful meeting dashboard. Timeline, calendar, action items, analytics, recordings.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='64' y2='64' gradientUnits='userSpaceOnUse'%3E%3Cstop offset='0%25' stop-color='%23818cf8'/%3E%3Cstop offset='50%25' stop-color='%23a78bfa'/%3E%3Cstop offset='100%25' stop-color='%23f472b6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='4' y='4' width='56' height='56' rx='14' fill='url(%23g)'/%3E%3Crect x='16' y='20' width='32' height='28' rx='4' fill='%230a0e1a'/%3E%3Crect x='16' y='20' width='32' height='6' rx='2' fill='%23f472b6'/%3E%3Ccircle cx='22' cy='16' r='2' fill='%230a0e1a'/%3E%3Ccircle cx='42' cy='16' r='2' fill='%230a0e1a'/%3E%3C/svg%3E">
+<style>
+/* ============================================================
+   Meeting Hub
+   Single-file dashboard. Vanilla JS + CSS. No build step.
+   ============================================================ */
+
+*, *::before, *::after { box-sizing: border-box; }
+:root {
+  --bg: #0a0e1a;
+  --bg-2: #0d1322;
+  --surface: rgba(28, 34, 64, 0.55);
+  --surface-2: rgba(22, 27, 48, 0.85);
+  --border: rgba(148, 163, 184, 0.10);
+  --border-strong: rgba(148, 163, 184, 0.20);
+  --text: #f1f5f9;
+  --text-dim: #cbd5e1;
+  --muted: #94a3b8;
+  --muted-2: #64748b;
+  --indigo: #818cf8;
+  --purple: #a78bfa;
+  --pink: #f472b6;
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --info: #60a5fa;
+  --gradient: linear-gradient(135deg, #818cf8 0%, #a78bfa 50%, #f472b6 100%);
+  --gradient-soft: linear-gradient(135deg, rgba(129,140,248,.20), rgba(167,139,250,.18), rgba(244,114,182,.18));
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.4);
+  --shadow-md: 0 6px 24px rgba(0,0,0,.35);
+  --shadow-lg: 0 20px 48px rgba(0,0,0,.55);
+  --radius: 16px;
+  --radius-sm: 10px;
+  --radius-lg: 24px;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-feature-settings: 'cv02','cv03','cv04','cv11';
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+body {
+  background-image:
+    radial-gradient(at 12% 0%, rgba(129,140,248,.14), transparent 45%),
+    radial-gradient(at 88% 100%, rgba(244,114,182,.10), transparent 45%),
+    radial-gradient(at 50% 50%, rgba(167,139,250,.06), transparent 60%);
+  background-attachment: fixed;
+}
+
+button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+input, textarea, select { font-family: inherit; color: inherit; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(148,163,184,.15); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,.30); }
+
+.gtext {
+  background: var(--gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* ============== Layout ============== */
+.app {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 24px 32px 80px;
+}
+
+/* ============== Top bar ============== */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255,255,255,.04);
+  margin-bottom: 24px;
+}
+.brand {
+  display: flex; align-items: center; gap: 12px;
+  font-weight: 800; letter-spacing: -0.02em; font-size: 17px;
+}
+.brand-mark {
+  width: 32px; height: 32px; border-radius: 10px;
+  background: var(--gradient);
+  display: grid; place-items: center;
+  box-shadow: 0 4px 14px rgba(167,139,250,.35);
+  flex-shrink: 0;
+}
+.brand-mark svg { width: 18px; height: 18px; }
+
+.search {
+  flex: 1; max-width: 520px;
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(15, 20, 36, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 9px 14px;
+  margin-left: 16px;
+  transition: border-color .15s, background .15s;
+}
+.search:hover, .search:focus-within { border-color: var(--border-strong); background: rgba(15, 20, 36, 0.85); }
+.search svg { width: 16px; height: 16px; color: var(--muted); flex-shrink: 0; }
+.search input {
+  flex: 1; background: transparent; border: none; outline: none;
+  color: var(--text); font-size: 14px;
+}
+.search input::placeholder { color: var(--muted-2); }
+.kbd {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  background: rgba(148,163,184,.10);
+  color: var(--muted);
+  padding: 2px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+}
+
+.topbar-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.icon-btn {
+  width: 36px; height: 36px; display: grid; place-items: center;
+  border-radius: 10px;
+  color: var(--muted);
+  transition: background .15s, color .15s;
+}
+.icon-btn:hover { background: rgba(148,163,184,.10); color: var(--text); }
+.icon-btn svg { width: 18px; height: 18px; }
+
+.btn-primary {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--gradient);
+  color: white;
+  padding: 9px 16px;
+  font-size: 13.5px;
+  font-weight: 700;
+  border-radius: 10px;
+  letter-spacing: -0.01em;
+  box-shadow: 0 4px 14px rgba(167,139,250,.32), inset 0 1px 0 rgba(255,255,255,.20);
+  transition: transform .12s, box-shadow .15s;
+}
+.btn-primary:hover { transform: translateY(-1px); box-shadow: 0 8px 22px rgba(167,139,250,.45), inset 0 1px 0 rgba(255,255,255,.20); }
+.btn-primary:active { transform: translateY(0); }
+.btn-primary svg { width: 16px; height: 16px; }
+
+.avatar {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #818cf8, #f472b6);
+  display: grid; place-items: center;
+  font-weight: 800; font-size: 13px;
+  color: white;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,.3);
+}
+
+/* ============== Hero strip ============== */
+.hero {
+  margin-bottom: 22px;
+  padding: 22px 26px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(20px) saturate(140%);
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 24px; flex-wrap: wrap;
+}
+.hero h1 {
+  margin: 0 0 6px;
+  font-size: 26px; font-weight: 800; letter-spacing: -0.02em;
+}
+.hero .sub { color: var(--muted); font-size: 14px; }
+.hero .sub strong { color: var(--text); font-weight: 700; }
+.hero-clock {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  text-align: right;
+  line-height: 1;
+}
+.hero-clock .ampm { font-size: 14px; color: var(--muted); margin-left: 6px; }
+.hero-clock-date { font-size: 12px; color: var(--muted); margin-top: 4px; text-align: right; }
+
+/* ============== KPI cards ============== */
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.kpi {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  backdrop-filter: blur(20px) saturate(140%);
+  position: relative;
+  overflow: hidden;
+}
+.kpi::before {
+  content: ''; position: absolute; inset: 0;
+  background: var(--gradient-soft);
+  opacity: 0; transition: opacity .25s;
+  pointer-events: none;
+}
+.kpi:hover::before { opacity: 0.5; }
+.kpi-label {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--muted); margin-bottom: 8px;
+  display: flex; align-items: center; gap: 8px;
+}
+.kpi-label .ico {
+  width: 26px; height: 26px; border-radius: 8px;
+  background: rgba(129,140,248,.15);
+  display: grid; place-items: center;
+  color: var(--indigo);
+}
+.kpi-label .ico svg { width: 14px; height: 14px; }
+.kpi-value {
+  font-size: 30px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1;
+}
+.kpi-value .unit { font-size: 16px; color: var(--muted); font-weight: 600; margin-left: 2px; }
+.kpi-delta {
+  font-size: 12px; margin-top: 6px;
+  display: flex; align-items: center; gap: 5px;
+  color: var(--muted);
+}
+.kpi-delta.up { color: var(--success); }
+.kpi-delta.down { color: var(--danger); }
+.kpi-spark {
+  position: absolute; right: 14px; bottom: 14px;
+  width: 80px; height: 28px;
+  opacity: 0.85;
+}
+
+/* ============== Main grid ============== */
+.grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+.grid-3 {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 22px;
+  backdrop-filter: blur(20px) saturate(140%);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255,255,255,.04);
+}
+.card-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 16px;
+}
+.card-title {
+  font-size: 15px; font-weight: 700; letter-spacing: -0.01em;
+  display: flex; align-items: center; gap: 8px;
+}
+.card-title .count {
+  font-size: 11px; padding: 2px 8px; border-radius: 100px;
+  background: rgba(148,163,184,.12); color: var(--muted); font-weight: 600;
+}
+.card-actions { display: flex; gap: 6px; }
+.tab {
+  font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 8px;
+  color: var(--muted); transition: all .15s;
+}
+.tab:hover { color: var(--text); background: rgba(148,163,184,.08); }
+.tab.active { color: var(--text); background: rgba(129,140,248,.18); }
+
+/* ============== Timeline ============== */
+.timeline { position: relative; padding-left: 70px; }
+.timeline::before {
+  content: ''; position: absolute;
+  left: 58px; top: 0; bottom: 0;
+  width: 2px;
+  background: linear-gradient(180deg, rgba(148,163,184,.20) 0%, rgba(148,163,184,.05) 100%);
+}
+.now-line {
+  position: absolute; left: 0; right: 0;
+  height: 2px;
+  background: var(--gradient);
+  box-shadow: 0 0 14px rgba(167,139,250,.55);
+  z-index: 2; pointer-events: none;
+  transition: top .3s;
+}
+.now-line::before {
+  content: 'NOW';
+  position: absolute; left: -50px; top: -8px;
+  font-size: 9px; font-weight: 800; letter-spacing: 0.10em;
+  color: white;
+  background: var(--gradient);
+  padding: 2px 6px; border-radius: 4px;
+}
+.now-line::after {
+  content: ''; position: absolute;
+  left: 56px; top: -4px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--pink); box-shadow: 0 0 0 4px rgba(244,114,182,.20);
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100% { box-shadow: 0 0 0 4px rgba(244,114,182,.20); } 50% { box-shadow: 0 0 0 8px rgba(244,114,182,.05); } }
+
+.meeting {
+  position: relative;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  background: rgba(15, 20, 36, 0.45);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: transform .15s, border-color .15s, background .15s;
+}
+.meeting:hover { transform: translateX(2px); border-color: var(--border-strong); background: rgba(15, 20, 36, 0.75); }
+.meeting.live { border-color: rgba(244,114,182,.35); background: linear-gradient(135deg, rgba(129,140,248,.12), rgba(244,114,182,.08)); }
+.meeting .dot {
+  position: absolute; left: -18px; top: 22px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--bg-2); border: 2px solid var(--indigo);
+  z-index: 1;
+}
+.meeting.type-standup .dot { border-color: var(--info); }
+.meeting.type-review .dot { border-color: var(--purple); }
+.meeting.type-client .dot { border-color: var(--pink); }
+.meeting.type-1on1 .dot { border-color: var(--success); }
+.meeting.type-focus .dot { border-color: var(--warning); }
+.meeting.live .dot { background: var(--pink); border-color: var(--pink); }
+.meeting .time {
+  position: absolute; left: -70px; top: 16px;
+  width: 50px; text-align: right;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.meeting .meeting-row {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+}
+.meeting h3 {
+  margin: 0 0 4px;
+  font-size: 14.5px; font-weight: 700; letter-spacing: -0.01em;
+}
+.meeting .meta {
+  font-size: 12px; color: var(--muted);
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.meeting .meta svg { width: 11px; height: 11px; }
+.type-pill {
+  font-size: 10px; padding: 2px 8px; border-radius: 100px;
+  background: rgba(148,163,184,.12); color: var(--muted);
+  font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+}
+.type-pill.type-standup { background: rgba(96,165,250,.15); color: #93c5fd; }
+.type-pill.type-review { background: rgba(167,139,250,.18); color: #c4b5fd; }
+.type-pill.type-client { background: rgba(244,114,182,.18); color: #f9a8d4; }
+.type-pill.type-1on1 { background: rgba(52,211,153,.15); color: #6ee7b7; }
+.type-pill.type-focus { background: rgba(251,191,36,.15); color: #fcd34d; }
+
+.avatars { display: flex; align-items: center; }
+.av {
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  background: var(--gradient);
+  border: 2px solid var(--bg-2);
+  display: grid; place-items: center;
+  font-size: 10px; font-weight: 800; color: white;
+  margin-left: -8px;
+}
+.av:first-child { margin-left: 0; }
+.av.more { background: rgba(148,163,184,.18); color: var(--muted); font-size: 10px; }
+
+.join-btn {
+  font-size: 12px; font-weight: 700;
+  padding: 6px 12px; border-radius: 8px;
+  background: var(--gradient);
+  color: white;
+  box-shadow: 0 2px 8px rgba(167,139,250,.30);
+  transition: transform .12s;
+  white-space: nowrap;
+}
+.join-btn:hover { transform: translateY(-1px); }
+.join-btn.disabled { background: rgba(148,163,184,.12); color: var(--muted); box-shadow: none; cursor: default; }
+.join-btn.disabled:hover { transform: none; }
+
+.progress {
+  margin-top: 10px;
+  height: 4px; background: rgba(148,163,184,.10);
+  border-radius: 100px; overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--gradient);
+  border-radius: 100px;
+  transition: width .8s ease;
+}
+
+/* ============== Calendar ============== */
+.cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.cal-title { font-weight: 700; font-size: 13px; }
+.cal-nav { display: flex; gap: 4px; }
+.cal-nav button {
+  width: 26px; height: 26px; border-radius: 7px;
+  display: grid; place-items: center; color: var(--muted);
+  transition: background .15s;
+}
+.cal-nav button:hover { background: rgba(148,163,184,.10); color: var(--text); }
+.cal-nav svg { width: 12px; height: 12px; }
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+.cal-dow {
+  text-align: center; font-size: 10px; font-weight: 700;
+  color: var(--muted); padding: 4px 0;
+  text-transform: uppercase; letter-spacing: 0.08em;
+}
+.cal-day {
+  aspect-ratio: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  font-size: 12px;
+  color: var(--text-dim);
+  border-radius: 9px;
+  cursor: pointer;
+  position: relative;
+  transition: background .15s;
+}
+.cal-day:hover { background: rgba(148,163,184,.08); }
+.cal-day.dim { color: var(--muted-2); }
+.cal-day.today {
+  background: var(--gradient);
+  color: white; font-weight: 800;
+  box-shadow: 0 4px 12px rgba(167,139,250,.35);
+}
+.cal-day.selected:not(.today) {
+  background: rgba(129,140,248,.18);
+  color: white; font-weight: 700;
+}
+.cal-day .pips {
+  display: flex; gap: 2px; margin-top: 3px;
+  height: 4px;
+}
+.cal-day .pip {
+  width: 3px; height: 3px; border-radius: 50%;
+  background: var(--purple);
+}
+.cal-day.today .pip { background: white; opacity: 0.7; }
+
+/* ============== Action items ============== */
+.action-list { display: flex; flex-direction: column; gap: 8px; }
+.action-item {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 11px 13px;
+  background: rgba(15, 20, 36, 0.45);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  transition: background .15s, opacity .2s;
+}
+.action-item:hover { background: rgba(15, 20, 36, 0.75); }
+.action-item.done { opacity: 0.45; }
+.action-item.done .action-text { text-decoration: line-through; color: var(--muted); }
+.checkbox {
+  width: 18px; height: 18px;
+  border-radius: 6px;
+  border: 1.5px solid var(--border-strong);
+  display: grid; place-items: center;
+  margin-top: 1px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color .15s, background .15s;
+}
+.checkbox:hover { border-color: var(--indigo); }
+.action-item.done .checkbox {
+  background: var(--gradient);
+  border-color: transparent;
+}
+.checkbox svg { width: 11px; height: 11px; color: white; opacity: 0; }
+.action-item.done .checkbox svg { opacity: 1; }
+.action-text { flex: 1; font-size: 13px; line-height: 1.45; }
+.action-meta { font-size: 11px; color: var(--muted); margin-top: 3px; }
+.action-meta .from { color: var(--purple); font-weight: 600; }
+.action-due {
+  font-size: 10px; font-weight: 700;
+  padding: 2px 7px; border-radius: 5px;
+  background: rgba(148,163,184,.10);
+  color: var(--muted);
+}
+.action-due.overdue { background: rgba(248,113,113,.15); color: #fca5a5; }
+.action-due.today { background: rgba(251,191,36,.15); color: #fcd34d; }
+
+/* ============== Charts ============== */
+.chart-card { padding: 22px; }
+.bar-chart {
+  display: flex; align-items: flex-end; gap: 14px;
+  height: 180px;
+  padding: 0 0 28px;
+  position: relative;
+}
+.bar-col {
+  flex: 1;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  height: 100%;
+  position: relative;
+}
+.bar-track {
+  width: 100%;
+  flex: 1;
+  display: flex; align-items: flex-end;
+  position: relative;
+  min-height: 4px;
+}
+.bar {
+  width: 100%;
+  background: var(--gradient);
+  border-radius: 7px 7px 2px 2px;
+  position: relative;
+  min-height: 4px;
+  transition: filter .15s, transform .15s;
+  box-shadow: 0 -2px 12px rgba(167,139,250,.25);
+}
+.bar.today { box-shadow: 0 -2px 18px rgba(244,114,182,.45); }
+.bar:hover { filter: brightness(1.15); transform: scaleY(1.02); transform-origin: bottom; }
+.bar-label {
+  font-size: 11px; color: var(--muted); font-weight: 600;
+  position: absolute; bottom: -22px;
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.bar-value {
+  font-size: 10px; font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-dim);
+  position: absolute; top: -18px;
+}
+
+/* Donut */
+.donut-wrap {
+  display: flex; align-items: center; gap: 24px;
+}
+.donut { width: 160px; height: 160px; flex-shrink: 0; }
+.donut-center {
+  fill: var(--text); font-size: 26px; font-weight: 800;
+  text-anchor: middle; dominant-baseline: central;
+}
+.donut-center-sub {
+  fill: var(--muted); font-size: 9px; font-weight: 700;
+  text-anchor: middle; dominant-baseline: central;
+  text-transform: uppercase; letter-spacing: 0.1em;
+}
+.donut-legend { flex: 1; display: flex; flex-direction: column; gap: 10px; }
+.legend-row {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 12.5px;
+}
+.legend-swatch { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+.legend-name { flex: 1; color: var(--text-dim); }
+.legend-value { color: var(--muted); font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600; }
+
+/* ============== Participants ============== */
+.participants {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;
+}
+.participant-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px;
+  background: rgba(15, 20, 36, 0.45);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+}
+.participant-row .av-lg {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: var(--gradient);
+  display: grid; place-items: center;
+  font-weight: 800; font-size: 12px; color: white;
+  flex-shrink: 0;
+}
+.participant-row .info { flex: 1; min-width: 0; }
+.participant-row .name { font-size: 13px; font-weight: 600; }
+.participant-row .role { font-size: 11px; color: var(--muted); }
+.participant-row .hours {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px; font-weight: 700;
+  color: var(--text);
+}
+.participant-row .hours .unit { color: var(--muted); font-weight: 500; }
+
+/* ============== Recordings ============== */
+.rec-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px;
+  background: rgba(15, 20, 36, 0.45);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: background .15s;
+}
+.rec-row:hover { background: rgba(15, 20, 36, 0.75); }
+.rec-thumb {
+  width: 56px; height: 38px;
+  border-radius: 7px;
+  background: var(--gradient-soft);
+  display: grid; place-items: center;
+  color: white; flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+}
+.rec-thumb::before {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(135deg, rgba(129,140,248,.3), rgba(244,114,182,.25));
+}
+.rec-thumb svg { width: 16px; height: 16px; position: relative; z-index: 1; }
+.rec-info { flex: 1; min-width: 0; }
+.rec-title {
+  font-size: 13px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rec-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.rec-duration {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; color: var(--muted);
+  background: rgba(148,163,184,.10);
+  padding: 2px 7px; border-radius: 5px;
+}
+
+/* ============== Modal ============== */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(5, 8, 18, 0.75);
+  backdrop-filter: blur(6px);
+  display: none;
+  align-items: center; justify-content: center;
+  z-index: 100;
+  padding: 20px;
+}
+.modal-overlay.open { display: flex; animation: fadeIn .15s ease; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+.modal {
+  background: linear-gradient(180deg, rgba(28,34,64,.95), rgba(22,27,48,.98));
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  width: 100%; max-width: 520px;
+  box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(255,255,255,.05);
+  animation: slideUp .25s ease;
+  max-height: 90vh; overflow-y: auto;
+}
+.modal h2 {
+  margin: 0 0 4px;
+  font-size: 20px; font-weight: 800; letter-spacing: -0.02em;
+}
+.modal .modal-sub { color: var(--muted); font-size: 13px; margin-bottom: 22px; }
+
+.form-row { margin-bottom: 14px; }
+.form-row label {
+  display: block;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--muted); margin-bottom: 6px;
+}
+.form-row input, .form-row select, .form-row textarea {
+  width: 100%;
+  background: rgba(15, 20, 36, 0.7);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 13px;
+  font-size: 13.5px;
+  color: var(--text);
+  outline: none;
+  transition: border-color .15s, background .15s;
+}
+.form-row input:focus, .form-row select:focus, .form-row textarea:focus {
+  border-color: var(--indigo);
+  background: rgba(15, 20, 36, 0.9);
+}
+.form-row textarea { resize: vertical; min-height: 70px; }
+.form-row.split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+.modal-actions {
+  display: flex; gap: 10px; justify-content: flex-end;
+  margin-top: 22px;
+}
+.btn-ghost {
+  padding: 9px 16px;
+  font-size: 13.5px; font-weight: 600;
+  color: var(--muted);
+  border-radius: 10px;
+  transition: background .15s, color .15s;
+}
+.btn-ghost:hover { background: rgba(148,163,184,.08); color: var(--text); }
+
+/* ============== Command palette ============== */
+.cmdk-overlay {
+  position: fixed; inset: 0;
+  background: rgba(5, 8, 18, 0.65);
+  backdrop-filter: blur(8px);
+  display: none;
+  align-items: flex-start; justify-content: center;
+  z-index: 200;
+  padding-top: 110px;
+}
+.cmdk-overlay.open { display: flex; animation: fadeIn .12s ease; }
+.cmdk {
+  background: linear-gradient(180deg, rgba(28,34,64,.96), rgba(22,27,48,.99));
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  width: 100%; max-width: 580px;
+  box-shadow: var(--shadow-lg);
+  animation: slideUp .18s ease;
+  overflow: hidden;
+}
+.cmdk-input-wrap {
+  display: flex; align-items: center; gap: 12px;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--border);
+}
+.cmdk-input-wrap svg { width: 18px; height: 18px; color: var(--muted); }
+.cmdk input {
+  flex: 1; background: transparent; border: none; outline: none;
+  font-size: 15px; color: var(--text);
+}
+.cmdk input::placeholder { color: var(--muted-2); }
+.cmdk-results { max-height: 360px; overflow-y: auto; padding: 8px; }
+.cmdk-group-title {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.10em;
+  color: var(--muted); text-transform: uppercase;
+  padding: 12px 14px 6px;
+}
+.cmdk-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px;
+  border-radius: 9px;
+  cursor: pointer;
+  font-size: 13.5px;
+}
+.cmdk-item:hover, .cmdk-item.active { background: rgba(129,140,248,.15); }
+.cmdk-item .ico {
+  width: 24px; height: 24px; border-radius: 7px;
+  background: rgba(148,163,184,.10);
+  display: grid; place-items: center;
+  color: var(--muted);
+}
+.cmdk-item .ico svg { width: 13px; height: 13px; }
+.cmdk-item .text { flex: 1; }
+.cmdk-item .hint { font-size: 11px; color: var(--muted); }
+.cmdk-empty {
+  text-align: center; padding: 36px 20px; color: var(--muted); font-size: 13px;
+}
+
+/* ============== Detail panel ============== */
+.panel-overlay {
+  position: fixed; inset: 0;
+  background: rgba(5, 8, 18, 0.5);
+  backdrop-filter: blur(4px);
+  display: none;
+  z-index: 150;
+}
+.panel-overlay.open { display: block; animation: fadeIn .15s ease; }
+.panel {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: 100%; max-width: 480px;
+  background: linear-gradient(180deg, rgba(28,34,64,.96), rgba(22,27,48,.99));
+  border-left: 1px solid var(--border-strong);
+  padding: 28px;
+  overflow-y: auto;
+  z-index: 151;
+  transform: translateX(100%);
+  transition: transform .25s ease;
+  box-shadow: var(--shadow-lg);
+}
+.panel.open { transform: translateX(0); }
+.panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
+.panel-title { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; flex: 1; padding-right: 16px; }
+.panel-section { margin-bottom: 20px; }
+.panel-section-label {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.10em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 8px;
+}
+.panel-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid rgba(148,163,184,.06);
+  font-size: 13.5px;
+}
+.panel-row svg { width: 14px; height: 14px; color: var(--muted); flex-shrink: 0; }
+.panel-row .label { color: var(--muted); width: 80px; flex-shrink: 0; font-size: 12.5px; }
+.panel-notes {
+  background: rgba(15, 20, 36, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 14px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+.panel-notes:empty::before { content: 'No notes yet — click to add.'; color: var(--muted-2); font-style: italic; }
+.panel-actions { display: flex; gap: 8px; margin-top: 24px; }
+.btn-danger {
+  padding: 9px 16px; font-size: 13px; font-weight: 600;
+  color: #fca5a5; border-radius: 10px;
+  background: rgba(248,113,113,.10);
+  transition: background .15s;
+}
+.btn-danger:hover { background: rgba(248,113,113,.20); }
+
+/* ============== Toasts ============== */
+.toasts {
+  position: fixed; bottom: 24px; right: 24px;
+  display: flex; flex-direction: column; gap: 10px;
+  z-index: 300;
+  pointer-events: none;
+}
+.toast {
+  background: linear-gradient(180deg, rgba(28,34,64,.95), rgba(22,27,48,.98));
+  border: 1px solid var(--border-strong);
+  padding: 12px 16px;
+  border-radius: 11px;
+  font-size: 13px;
+  display: flex; align-items: center; gap: 10px;
+  box-shadow: var(--shadow-md);
+  animation: slideUp .25s ease;
+  pointer-events: auto;
+  min-width: 220px;
+}
+.toast svg { width: 16px; height: 16px; color: var(--success); flex-shrink: 0; }
+
+/* ============== Empty state ============== */
+.empty {
+  text-align: center; padding: 36px 20px;
+  color: var(--muted);
+}
+.empty .ico {
+  width: 48px; height: 48px;
+  margin: 0 auto 14px;
+  border-radius: 14px;
+  background: rgba(148,163,184,.08);
+  display: grid; place-items: center;
+  color: var(--muted);
+}
+.empty .ico svg { width: 22px; height: 22px; }
+.empty h4 { margin: 0 0 4px; font-size: 14px; color: var(--text); font-weight: 700; }
+.empty p { margin: 0; font-size: 12.5px; }
+
+/* ============== Responsive ============== */
+@media (max-width: 1100px) {
+  .kpis { grid-template-columns: repeat(2, 1fr); }
+  .grid, .grid-3 { grid-template-columns: 1fr; }
+  .participants { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .app { padding: 16px 14px 60px; }
+  .topbar { flex-wrap: wrap; }
+  .search { order: 5; flex-basis: 100%; margin-left: 0; max-width: none; }
+  .hero { flex-direction: column; align-items: flex-start; }
+  .hero-clock, .hero-clock-date { text-align: left; }
+  .kpis { grid-template-columns: 1fr 1fr; }
+  .timeline { padding-left: 60px; }
+  .meeting .time { left: -60px; }
+  .donut-wrap { flex-direction: column; }
+  .modal, .panel { max-width: 100%; }
+}
+
+/* Print: clean layout */
+@media print {
+  body { background: white; color: black; }
+  .topbar, .cmdk-overlay, .panel-overlay, .modal-overlay, .toasts { display: none !important; }
+  .card { background: white; border: 1px solid #ddd; box-shadow: none; }
+  * { color: black !important; -webkit-text-fill-color: initial !important; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Top bar -->
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark">
+        <svg viewBox="0 0 64 64" fill="none">
+          <rect x="12" y="20" width="40" height="32" rx="4" fill="white" opacity="0.95"/>
+          <rect x="12" y="20" width="40" height="8" fill="rgba(255,255,255,0.6)"/>
+          <circle cx="22" cy="14" r="3" fill="white"/>
+          <circle cx="42" cy="14" r="3" fill="white"/>
+          <rect x="20" y="14" width="4" height="10" fill="white"/>
+          <rect x="40" y="14" width="4" height="10" fill="white"/>
+        </svg>
+      </div>
+      <span>Meeting <span class="gtext">Hub</span></span>
+    </div>
+
+    <label class="search" for="globalSearch">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input id="globalSearch" placeholder="Search meetings, people, recordings…" autocomplete="off">
+      <span class="kbd">⌘K</span>
+    </label>
+
+    <div class="topbar-actions">
+      <button class="icon-btn" title="Shortcuts (?)" id="btnShortcuts">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M18 14h.01M10 14h4"/></svg>
+      </button>
+      <button class="icon-btn" title="Notifications">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+      </button>
+      <button class="btn-primary" id="btnNewMeeting">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5v14"/></svg>
+        New meeting
+      </button>
+      <div class="avatar" title="Profile">YO</div>
+    </div>
+  </div>
+
+  <!-- Hero -->
+  <div class="hero">
+    <div>
+      <h1 id="greeting">Good afternoon</h1>
+      <div class="sub" id="heroSub">Loading your day…</div>
+    </div>
+    <div>
+      <div class="hero-clock" id="heroClock">--:--<span class="ampm">--</span></div>
+      <div class="hero-clock-date" id="heroDate">—</div>
+    </div>
+  </div>
+
+  <!-- KPIs -->
+  <div class="kpis">
+    <div class="kpi">
+      <div class="kpi-label"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></span>Meetings today</div>
+      <div class="kpi-value" id="kpiToday">0</div>
+      <div class="kpi-delta up" id="kpiTodayDelta">— vs avg</div>
+      <svg class="kpi-spark" id="sparkToday" viewBox="0 0 80 28" preserveAspectRatio="none"></svg>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label"><span class="ico" style="background:rgba(167,139,250,.15);color:var(--purple)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>Hours this week</div>
+      <div class="kpi-value" id="kpiHours">0<span class="unit">h</span></div>
+      <div class="kpi-delta" id="kpiHoursDelta">— vs last week</div>
+      <svg class="kpi-spark" id="sparkHours" viewBox="0 0 80 28" preserveAspectRatio="none"></svg>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label"><span class="ico" style="background:rgba(52,211,153,.15);color:var(--success)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></span>On-time rate</div>
+      <div class="kpi-value" id="kpiOntime">0<span class="unit">%</span></div>
+      <div class="kpi-delta up" id="kpiOntimeDelta">— last 30 days</div>
+      <svg class="kpi-spark" id="sparkOntime" viewBox="0 0 80 28" preserveAspectRatio="none"></svg>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label"><span class="ico" style="background:rgba(244,114,182,.15);color:var(--pink)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>Open action items</div>
+      <div class="kpi-value" id="kpiActions">0</div>
+      <div class="kpi-delta" id="kpiActionsDelta">— closing rate</div>
+      <svg class="kpi-spark" id="sparkActions" viewBox="0 0 80 28" preserveAspectRatio="none"></svg>
+    </div>
+  </div>
+
+  <!-- Main grid: timeline + calendar -->
+  <div class="grid">
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title">Today's schedule <span class="count" id="timelineCount">0</span></div>
+        <div class="card-actions">
+          <button class="tab active" data-tab="today">Today</button>
+          <button class="tab" data-tab="tomorrow">Tomorrow</button>
+          <button class="tab" data-tab="week">This week</button>
+        </div>
+      </div>
+      <div id="timeline" class="timeline"></div>
+    </div>
+
+    <div>
+      <div class="card" style="margin-bottom: 20px;">
+        <div class="cal-head">
+          <div class="cal-title" id="calTitle">—</div>
+          <div class="cal-nav">
+            <button id="calPrev" aria-label="Previous month"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg></button>
+            <button id="calToday" style="width:auto;padding:0 9px;font-size:11px;font-weight:600;">Today</button>
+            <button id="calNext" aria-label="Next month"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg></button>
+          </div>
+        </div>
+        <div class="cal-grid" id="calGrid"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Action items <span class="count" id="actionCount">0</span></div>
+          <button class="tab" id="btnAddAction" title="Add action item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="vertical-align:middle"><path d="M12 5v14M5 12h14"/></svg>
+            Add
+          </button>
+        </div>
+        <div class="action-list" id="actionList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Charts row -->
+  <div class="grid-3">
+    <div class="card chart-card">
+      <div class="card-head">
+        <div class="card-title">Meeting hours this week</div>
+        <div class="card-actions">
+          <span class="tab active">Hours</span>
+        </div>
+      </div>
+      <div class="bar-chart" id="barChart"></div>
+    </div>
+
+    <div class="card chart-card">
+      <div class="card-head">
+        <div class="card-title">By type</div>
+      </div>
+      <div class="donut-wrap">
+        <svg class="donut" id="donut" viewBox="0 0 100 100"></svg>
+        <div class="donut-legend" id="donutLegend"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom row: participants + recordings -->
+  <div class="grid-3">
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title">Top participants <span class="count" id="participantsCount">0</span></div>
+      </div>
+      <div class="participants" id="participants"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title">Recent recordings</div>
+      </div>
+      <div id="recordings"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: New / Edit meeting -->
+<div class="modal-overlay" id="meetingModal">
+  <div class="modal" role="dialog" aria-labelledby="modalTitle">
+    <h2 id="modalTitle">New meeting</h2>
+    <div class="modal-sub">Block out time. Add the right people. Done.</div>
+    <form id="meetingForm">
+      <input type="hidden" name="id" id="fId">
+      <div class="form-row">
+        <label for="fTitle">Title</label>
+        <input id="fTitle" name="title" type="text" required placeholder="e.g. Design review">
+      </div>
+      <div class="form-row split">
+        <div>
+          <label for="fDate">Date</label>
+          <input id="fDate" name="date" type="date" required>
+        </div>
+        <div>
+          <label for="fType">Type</label>
+          <select id="fType" name="type">
+            <option value="standup">Standup</option>
+            <option value="review">Review</option>
+            <option value="client">Client</option>
+            <option value="1on1">1:1</option>
+            <option value="focus">Focus</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row split">
+        <div>
+          <label for="fStart">Start</label>
+          <input id="fStart" name="start" type="time" required>
+        </div>
+        <div>
+          <label for="fEnd">End</label>
+          <input id="fEnd" name="end" type="time" required>
+        </div>
+      </div>
+      <div class="form-row">
+        <label for="fPeople">Participants (comma separated)</label>
+        <input id="fPeople" name="participants" type="text" placeholder="Alex Chen, Sarah Kim, You">
+      </div>
+      <div class="form-row">
+        <label for="fLocation">Location</label>
+        <input id="fLocation" name="location" type="text" placeholder="Zoom, Google Meet, conference room…">
+      </div>
+      <div class="form-row">
+        <label for="fNotes">Notes / agenda</label>
+        <textarea id="fNotes" name="notes" placeholder="What this meeting is about…"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="btnCancelModal">Cancel</button>
+        <button type="submit" class="btn-primary">Save meeting</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Shortcuts modal -->
+<div class="modal-overlay" id="shortcutsModal">
+  <div class="modal" style="max-width: 460px;">
+    <h2>Keyboard shortcuts</h2>
+    <div class="modal-sub">Speed runs only.</div>
+    <div style="display:flex;flex-direction:column;gap:10px;font-size:13.5px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(148,163,184,.08);"><span>Open command palette</span><span class="kbd">⌘K</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(148,163,184,.08);"><span>New meeting</span><span class="kbd">N</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(148,163,184,.08);"><span>Add action item</span><span class="kbd">A</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(148,163,184,.08);"><span>Go to today</span><span class="kbd">T</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(148,163,184,.08);"><span>Show shortcuts</span><span class="kbd">?</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;"><span>Close any modal</span><span class="kbd">Esc</span></div>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn-primary" id="btnCloseShortcuts">Got it</button>
+    </div>
+  </div>
+</div>
+
+<!-- Detail panel -->
+<div class="panel-overlay" id="panelOverlay"></div>
+<aside class="panel" id="detailPanel" aria-hidden="true">
+  <div class="panel-head">
+    <div class="panel-title" id="panelTitle">—</div>
+    <button class="icon-btn" id="btnClosePanel" aria-label="Close panel">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m18 6-12 12M6 6l12 12"/></svg>
+    </button>
+  </div>
+  <div id="panelBody"></div>
+</aside>
+
+<!-- Command palette -->
+<div class="cmdk-overlay" id="cmdkOverlay">
+  <div class="cmdk">
+    <div class="cmdk-input-wrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input id="cmdkInput" placeholder="Type a command or search…" autocomplete="off">
+      <span class="kbd">Esc</span>
+    </div>
+    <div class="cmdk-results" id="cmdkResults"></div>
+  </div>
+</div>
+
+<!-- Toasts -->
+<div class="toasts" id="toasts"></div>
+
+<script>
+/* ============================================================
+   Meeting Hub — vanilla JS dashboard
+   ============================================================ */
+
+/* ---------- Utils (also exported for tests via window.MH) ---------- */
+const MH = {};
+MH.uid = () => 'm_' + Math.random().toString(36).slice(2, 10);
+MH.pad2 = n => String(n).padStart(2, '0');
+MH.iso = d => `${d.getFullYear()}-${MH.pad2(d.getMonth()+1)}-${MH.pad2(d.getDate())}`;
+MH.parseTime = s => { const [h, m] = s.split(':').map(Number); return h * 60 + m; };
+MH.minutesToHHMM = m => `${MH.pad2(Math.floor(m/60))}:${MH.pad2(m%60)}`;
+MH.fmtTime = s => {
+  const [h, m] = s.split(':').map(Number);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const hh = h % 12 === 0 ? 12 : h % 12;
+  return `${hh}:${MH.pad2(m)} ${ampm}`;
+};
+MH.fmtTime24 = s => s;
+MH.duration = (a, b) => MH.parseTime(b) - MH.parseTime(a);
+MH.diffHumanFromNow = (dateStr, timeStr) => {
+  const target = new Date(`${dateStr}T${timeStr}:00`);
+  const delta = target - new Date();
+  if (delta < 0) return null;
+  const mins = Math.floor(delta / 60000);
+  if (mins < 1) return 'now';
+  if (mins < 60) return `in ${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  const rem = mins % 60;
+  if (hrs < 24) return rem ? `in ${hrs}h ${rem}m` : `in ${hrs}h`;
+  const days = Math.floor(hrs / 24);
+  return `in ${days}d`;
+};
+MH.initials = name => {
+  if (!name) return '?';
+  const parts = String(name).trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length-1][0]).toUpperCase();
+};
+MH.escapeHtml = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+MH.startOfWeek = d => { const out = new Date(d); const day = (out.getDay() + 6) % 7; out.setDate(out.getDate() - day); out.setHours(0,0,0,0); return out; };
+MH.addDays = (d, n) => { const out = new Date(d); out.setDate(out.getDate() + n); return out; };
+
+/* ---------- Storage ---------- */
+const STORAGE_KEY = 'meetinghub:v1';
+MH.load = () => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (e) {
+    console.warn('Failed to load state', e);
+    return null;
+  }
+};
+MH.save = (state) => {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+  catch (e) { console.warn('Failed to save state', e); }
+};
+MH.reset = () => localStorage.removeItem(STORAGE_KEY);
+
+/* ---------- Sample data seed ---------- */
+function seedData() {
+  const today = new Date();
+  const isoToday = MH.iso(today);
+  const tomorrow = MH.iso(MH.addDays(today, 1));
+  const yest = MH.iso(MH.addDays(today, -1));
+  const dPlus2 = MH.iso(MH.addDays(today, 2));
+
+  // Try to schedule a "now" meeting around current time
+  const now = today.getHours() * 60 + today.getMinutes();
+  const liveStart = MH.minutesToHHMM(Math.max(0, now - 12));
+  const liveEnd = MH.minutesToHHMM(Math.min(23*60+59, now + 18));
+
+  const meetings = [
+    { id: MH.uid(), title: 'Daily standup', type: 'standup', date: isoToday, start: '09:00', end: '09:15',
+      participants: ['Alex Chen', 'Sarah Kim', 'Mark Patel', 'You'],
+      location: 'Zoom · main room',
+      notes: 'Quick sync. Blockers, today\'s priorities. Mark: blocked on auth API. Alex: shipping deploy fix today.' },
+    { id: MH.uid(), title: 'Design review — onboarding v3', type: 'review', date: isoToday, start: liveStart, end: liveEnd,
+      participants: ['Sarah Kim', 'Mei Tanaka', 'You', 'Jordan Ortiz', 'Priya Shah'],
+      location: 'Figma + Meet',
+      notes: 'Review the new onboarding flow. Focus areas:\n• Empty state copy\n• Loading skeletons\n• First-run tour' },
+    { id: MH.uid(), title: 'Client call — Atlas Co.', type: 'client', date: isoToday, start: '14:00', end: '14:45',
+      participants: ['Priya Shah', 'You', 'Diego López'],
+      location: 'Google Meet',
+      notes: 'Quarterly review with Atlas. Pull renewal numbers from CRM before call.' },
+    { id: MH.uid(), title: '1:1 with Mark', type: '1on1', date: isoToday, start: '16:00', end: '16:30',
+      participants: ['Mark Patel', 'You'],
+      location: 'Coffee · Bean Lab',
+      notes: 'Career conversation. Mark has been pushing on the platform team — discuss next quarter goals.' },
+
+    { id: MH.uid(), title: 'Sprint planning', type: 'review', date: tomorrow, start: '10:00', end: '11:30',
+      participants: ['Alex Chen', 'Sarah Kim', 'Mark Patel', 'Jordan Ortiz', 'You'],
+      location: 'Conference room A',
+      notes: 'Plan sprint 24. Bring the prioritized backlog.' },
+    { id: MH.uid(), title: 'Deep work — auth migration', type: 'focus', date: tomorrow, start: '13:00', end: '16:00',
+      participants: ['You'],
+      location: 'Heads down',
+      notes: 'Finish migrating session tokens to httpOnly cookies. No interruptions.' },
+    { id: MH.uid(), title: 'Investor sync', type: 'client', date: dPlus2, start: '11:00', end: '11:45',
+      participants: ['Priya Shah', 'You'],
+      location: 'Zoom',
+      notes: 'Monthly update with seed lead.' },
+    { id: MH.uid(), title: 'Retro — sprint 23', type: 'review', date: yest, start: '15:00', end: '16:00',
+      participants: ['Alex Chen', 'Sarah Kim', 'Mark Patel', 'Mei Tanaka', 'You'],
+      location: 'Conference room A',
+      notes: 'What went well, what to change. Big win: shipped auth refresh. Pain: PR review times.' },
+  ];
+
+  const actionItems = [
+    { id: MH.uid(), text: 'Follow up with Sarah on the onboarding copy', from: 'Design review', due: isoToday, done: false },
+    { id: MH.uid(), text: 'Send Atlas renewal numbers to Priya before call', from: 'Client call — Atlas Co.', due: isoToday, done: false },
+    { id: MH.uid(), text: 'Draft Q2 platform team goals for 1:1', from: '1:1 with Mark', due: tomorrow, done: false },
+    { id: MH.uid(), text: 'Cut sprint 24 backlog into tickets', from: 'Sprint planning', due: tomorrow, done: false },
+    { id: MH.uid(), text: 'Review PR #482 (auth middleware)', from: 'Standup', due: MH.iso(MH.addDays(today, -1)), done: false },
+    { id: MH.uid(), text: 'Schedule legal review for cookie change', from: 'Deep work — auth migration', due: dPlus2, done: false },
+    { id: MH.uid(), text: 'Confirm Jordan\'s mic setup for client call', from: 'Client call — Atlas Co.', due: isoToday, done: true },
+  ];
+
+  const recordings = [
+    { id: 'r1', title: 'All-hands Q1 wrap-up', date: MH.iso(MH.addDays(today, -2)), duration: '47:12' },
+    { id: 'r2', title: 'Customer interview — Helena (Acme)', date: MH.iso(MH.addDays(today, -3)), duration: '32:08' },
+    { id: 'r3', title: 'Eng review — auth migration plan', date: MH.iso(MH.addDays(today, -5)), duration: '58:44' },
+    { id: 'r4', title: 'Retro — sprint 22', date: MH.iso(MH.addDays(today, -8)), duration: '52:30' },
+  ];
+
+  return { meetings, actionItems, recordings, version: 1 };
+}
+
+/* ---------- State ---------- */
+let state = MH.load() || seedData();
+MH.save(state);
+let viewDate = new Date(); // calendar month being viewed
+let selectedDate = MH.iso(new Date());
+let timelineMode = 'today'; // today | tomorrow | week
+let editingId = null;
+
+/* ---------- Greetings ---------- */
+function greetingText() {
+  const h = new Date().getHours();
+  if (h < 5) return 'Burning the midnight oil';
+  if (h < 12) return 'Good morning';
+  if (h < 18) return 'Good afternoon';
+  return 'Good evening';
+}
+
+/* ---------- Render: hero ---------- */
+function renderHero() {
+  const now = new Date();
+  const todays = state.meetings.filter(m => m.date === MH.iso(now)).sort((a,b) => MH.parseTime(a.start) - MH.parseTime(b.start));
+  document.getElementById('greeting').textContent = greetingText();
+  const sub = document.getElementById('heroSub');
+
+  const upcoming = todays.find(m => MH.parseTime(m.end) > now.getHours()*60 + now.getMinutes());
+  if (todays.length === 0) {
+    sub.innerHTML = `Nothing on your calendar today. <strong>Enjoy the white space.</strong>`;
+  } else if (upcoming) {
+    const when = MH.diffHumanFromNow(upcoming.date, upcoming.start);
+    const live = MH.parseTime(upcoming.start) <= now.getHours()*60 + now.getMinutes();
+    sub.innerHTML = live
+      ? `<strong style="color:#f9a8d4;">● Live now:</strong> ${MH.escapeHtml(upcoming.title)} — until ${MH.fmtTime(upcoming.end)}`
+      : `You have <strong>${todays.length}</strong> meeting${todays.length===1?'':'s'} today · Next: <strong>${MH.escapeHtml(upcoming.title)}</strong> ${when ? when : ''}`;
+  } else {
+    sub.innerHTML = `All done for today. <strong>${todays.length}</strong> meeting${todays.length===1?'':'s'} wrapped up — go log off.`;
+  }
+}
+
+function renderClock() {
+  const now = new Date();
+  let h = now.getHours();
+  const m = now.getMinutes();
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 === 0 ? 12 : h % 12;
+  document.getElementById('heroClock').innerHTML = `${MH.pad2(h)}:${MH.pad2(m)}<span class="ampm">${ampm}</span>`;
+  document.getElementById('heroDate').textContent = now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+}
+
+/* ---------- Render: KPIs ---------- */
+function renderKpis() {
+  const today = MH.iso(new Date());
+  const todays = state.meetings.filter(m => m.date === today);
+  const weekStart = MH.startOfWeek(new Date());
+  const weekDays = [...Array(7)].map((_, i) => MH.iso(MH.addDays(weekStart, i)));
+  const week = state.meetings.filter(m => weekDays.includes(m.date));
+  const weekMinutes = week.reduce((sum, m) => sum + MH.duration(m.start, m.end), 0);
+
+  document.getElementById('kpiToday').textContent = todays.length;
+  document.getElementById('kpiTodayDelta').innerHTML = todays.length > 2 ? `<span>↗</span> Busy day` : `<span>—</span> Calm-ish`;
+
+  document.getElementById('kpiHours').innerHTML = `${(weekMinutes/60).toFixed(1)}<span class="unit">h</span>`;
+  document.getElementById('kpiHoursDelta').innerHTML = `<span>—</span> ${week.length} meetings`;
+
+  // Synthetic on-time rate (based on count of meetings).
+  const ontime = 88 + (state.meetings.length % 7);
+  document.getElementById('kpiOntime').innerHTML = `${ontime}<span class="unit">%</span>`;
+  document.getElementById('kpiOntimeDelta').innerHTML = `<span class="kpi-delta up">↗ +3% trend</span>`;
+
+  const open = state.actionItems.filter(a => !a.done).length;
+  document.getElementById('kpiActions').textContent = open;
+  const overdue = state.actionItems.filter(a => !a.done && a.due < today).length;
+  document.getElementById('kpiActionsDelta').innerHTML = overdue > 0
+    ? `<span class="kpi-delta down">${overdue} overdue</span>`
+    : `<span class="kpi-delta up">↗ on track</span>`;
+
+  // Sparklines
+  drawSpark('sparkToday', sparkSeries(7).map((_,i)=> i===6 ? todays.length : (1+(i*7)%4)));
+  drawSpark('sparkHours', weekDays.map(d => state.meetings.filter(m=>m.date===d).reduce((s,m)=>s+MH.duration(m.start,m.end),0)/60));
+  drawSpark('sparkOntime', sparkSeries(7).map((v,i)=> 80 + ((i*11+ontime)%18)));
+  drawSpark('sparkActions', sparkSeries(7).map((v,i)=> Math.max(2, open + ((i*5)%6) - 3)));
+}
+
+function sparkSeries(n) { return Array.from({length: n}, () => 0); }
+function drawSpark(id, values) {
+  const svg = document.getElementById(id);
+  if (!svg) return;
+  const W = 80, H = 28;
+  const max = Math.max(1, ...values);
+  const min = Math.min(0, ...values);
+  const range = max - min || 1;
+  const pts = values.map((v, i) => {
+    const x = (i / Math.max(1, values.length - 1)) * (W - 4) + 2;
+    const y = H - 4 - ((v - min) / range) * (H - 8);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  svg.innerHTML = `
+    <defs>
+      <linearGradient id="${id}-fill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#a78bfa" stop-opacity="0.4"/>
+        <stop offset="100%" stop-color="#a78bfa" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="${id}-line" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0%" stop-color="#818cf8"/>
+        <stop offset="100%" stop-color="#f472b6"/>
+      </linearGradient>
+    </defs>
+    <polygon points="2,${H} ${pts} ${W-2},${H}" fill="url(#${id}-fill)"/>
+    <polyline points="${pts}" fill="none" stroke="url(#${id}-line)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  `;
+}
+
+/* ---------- Render: timeline ---------- */
+function getTimelineMeetings() {
+  const today = new Date();
+  if (timelineMode === 'today') {
+    return state.meetings.filter(m => m.date === MH.iso(today));
+  }
+  if (timelineMode === 'tomorrow') {
+    return state.meetings.filter(m => m.date === MH.iso(MH.addDays(today, 1)));
+  }
+  // week
+  const start = MH.startOfWeek(today);
+  const days = [...Array(7)].map((_, i) => MH.iso(MH.addDays(start, i)));
+  return state.meetings.filter(m => days.includes(m.date));
+}
+
+function renderTimeline() {
+  const el = document.getElementById('timeline');
+  const list = getTimelineMeetings().sort((a, b) => (a.date+a.start).localeCompare(b.date+b.start));
+  document.getElementById('timelineCount').textContent = list.length;
+
+  if (list.length === 0) {
+    el.innerHTML = `
+      <div class="empty">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></div>
+        <h4>Nothing scheduled</h4>
+        <p>Add a meeting to see it on the timeline.</p>
+      </div>`;
+    return;
+  }
+
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const todayIso = MH.iso(now);
+
+  el.innerHTML = list.map(m => {
+    const live = m.date === todayIso && MH.parseTime(m.start) <= nowMin && MH.parseTime(m.end) > nowMin;
+    const past = m.date < todayIso || (m.date === todayIso && MH.parseTime(m.end) <= nowMin);
+    const future = !live && !past;
+    const progress = live ? ((nowMin - MH.parseTime(m.start)) / MH.duration(m.start, m.end)) * 100 : 0;
+    const dateLabel = m.date === todayIso ? '' : ` · ${new Date(m.date+'T00:00:00').toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'})}`;
+    const peopleShown = m.participants.slice(0, 3);
+    const more = m.participants.length - peopleShown.length;
+
+    return `
+      <div class="meeting type-${m.type} ${live ? 'live' : ''}" data-id="${m.id}" style="${past?'opacity:.55;':''}">
+        <div class="time">${MH.fmtTime24(m.start)}</div>
+        <div class="dot"></div>
+        <div class="meeting-row">
+          <div style="flex:1; min-width: 0;">
+            <h3>${MH.escapeHtml(m.title)}</h3>
+            <div class="meta">
+              <span class="type-pill type-${m.type}">${m.type}</span>
+              <span>${MH.fmtTime(m.start)} → ${MH.fmtTime(m.end)} · ${MH.duration(m.start, m.end)}m${dateLabel}</span>
+              <span style="display:inline-flex;align-items:center;gap:4px;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                ${MH.escapeHtml(m.location || '—')}
+              </span>
+            </div>
+          </div>
+          <div style="display:flex; align-items:center; gap:10px; flex-shrink:0;">
+            <div class="avatars">
+              ${peopleShown.map(p => `<div class="av" title="${MH.escapeHtml(p)}">${MH.initials(p)}</div>`).join('')}
+              ${more > 0 ? `<div class="av more">+${more}</div>` : ''}
+            </div>
+            <button class="join-btn ${future || live ? '' : 'disabled'}" data-action="join" data-id="${m.id}">
+              ${live ? 'Join live' : future ? 'Join' : 'Done'}
+            </button>
+          </div>
+        </div>
+        ${live ? `<div class="progress"><div class="progress-fill" style="width:${progress.toFixed(1)}%"></div></div>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  // Now line
+  if (timelineMode === 'today') positionNowLine();
+}
+
+function positionNowLine() {
+  // best-effort: place a "now" marker just before the next meeting today
+  const el = document.getElementById('timeline');
+  const existing = el.querySelector('.now-line');
+  if (existing) existing.remove();
+  const now = new Date();
+  if (MH.iso(now) === MH.iso(new Date()) && timelineMode === 'today') {
+    const nowMin = now.getHours()*60 + now.getMinutes();
+    const today = MH.iso(now);
+    const todayMeetings = state.meetings.filter(m => m.date === today).sort((a,b)=>MH.parseTime(a.start)-MH.parseTime(b.start));
+    let beforeIdx = todayMeetings.findIndex(m => MH.parseTime(m.start) > nowMin);
+    if (beforeIdx === -1) return;
+    const cards = el.querySelectorAll('.meeting');
+    const target = cards[beforeIdx];
+    if (!target) return;
+    const line = document.createElement('div');
+    line.className = 'now-line';
+    line.style.top = (target.offsetTop - 6) + 'px';
+    el.appendChild(line);
+  }
+}
+
+/* ---------- Render: calendar ---------- */
+function renderCalendar() {
+  const el = document.getElementById('calGrid');
+  const title = document.getElementById('calTitle');
+  const y = viewDate.getFullYear();
+  const mo = viewDate.getMonth();
+  title.textContent = viewDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+
+  const firstDay = new Date(y, mo, 1);
+  const startOffset = (firstDay.getDay() + 6) % 7; // Monday-start
+  const daysInMonth = new Date(y, mo + 1, 0).getDate();
+  const prevDays = new Date(y, mo, 0).getDate();
+
+  const dows = ['M','T','W','T','F','S','S'];
+  let html = dows.map(d => `<div class="cal-dow">${d}</div>`).join('');
+
+  const today = MH.iso(new Date());
+  const meetingsByDate = state.meetings.reduce((acc, m) => {
+    (acc[m.date] = acc[m.date] || []).push(m); return acc;
+  }, {});
+
+  // Previous month spill
+  for (let i = startOffset - 1; i >= 0; i--) {
+    const d = prevDays - i;
+    const dateStr = MH.iso(new Date(y, mo - 1, d));
+    const count = (meetingsByDate[dateStr] || []).length;
+    html += `<div class="cal-day dim" data-date="${dateStr}">${d}${pipDots(count)}</div>`;
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = MH.iso(new Date(y, mo, d));
+    const isToday = dateStr === today;
+    const isSel = dateStr === selectedDate;
+    const count = (meetingsByDate[dateStr] || []).length;
+    const cls = ['cal-day'];
+    if (isToday) cls.push('today');
+    if (isSel) cls.push('selected');
+    html += `<div class="${cls.join(' ')}" data-date="${dateStr}">${d}${pipDots(count)}</div>`;
+  }
+  // Next month spill (fill the grid)
+  const totalCells = startOffset + daysInMonth;
+  const fill = (7 - totalCells % 7) % 7;
+  for (let d = 1; d <= fill; d++) {
+    const dateStr = MH.iso(new Date(y, mo + 1, d));
+    const count = (meetingsByDate[dateStr] || []).length;
+    html += `<div class="cal-day dim" data-date="${dateStr}">${d}${pipDots(count)}</div>`;
+  }
+  el.innerHTML = html;
+}
+function pipDots(count) {
+  if (!count) return '<div class="pips"></div>';
+  const dots = Math.min(count, 3);
+  return `<div class="pips">${'<div class="pip"></div>'.repeat(dots)}</div>`;
+}
+
+/* ---------- Render: action items ---------- */
+function renderActions() {
+  const el = document.getElementById('actionList');
+  const today = MH.iso(new Date());
+  const list = [...state.actionItems].sort((a, b) => {
+    if (a.done !== b.done) return a.done ? 1 : -1;
+    return a.due.localeCompare(b.due);
+  });
+  document.getElementById('actionCount').textContent = state.actionItems.filter(a=>!a.done).length;
+
+  if (list.length === 0) {
+    el.innerHTML = `<div class="empty"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 11 3 3L22 4"/></svg></div><h4>No action items</h4><p>You're clear. Press <span class="kbd">A</span> to add one.</p></div>`;
+    return;
+  }
+
+  el.innerHTML = list.map(a => {
+    let dueCls = '';
+    let dueText = '';
+    if (a.due) {
+      if (a.due < today) { dueCls = 'overdue'; dueText = 'Overdue'; }
+      else if (a.due === today) { dueCls = 'today'; dueText = 'Today'; }
+      else {
+        const d = new Date(a.due+'T00:00:00');
+        dueText = d.toLocaleDateString(undefined, { month:'short', day:'numeric' });
+      }
+    }
+    return `
+      <div class="action-item ${a.done?'done':''}" data-id="${a.id}">
+        <div class="checkbox" data-action="toggle-action" data-id="${a.id}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>
+        </div>
+        <div style="flex:1; min-width:0;">
+          <div class="action-text">${MH.escapeHtml(a.text)}</div>
+          <div class="action-meta">From <span class="from">${MH.escapeHtml(a.from || 'manual')}</span></div>
+        </div>
+        ${dueText ? `<div class="action-due ${dueCls}">${dueText}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+/* ---------- Render: bar chart (weekly hours) ---------- */
+function renderBarChart() {
+  const start = MH.startOfWeek(new Date());
+  const days = [...Array(7)].map((_, i) => MH.addDays(start, i));
+  const todayIso = MH.iso(new Date());
+  const data = days.map(d => {
+    const iso = MH.iso(d);
+    const mins = state.meetings.filter(m => m.date === iso).reduce((s, m) => s + MH.duration(m.start, m.end), 0);
+    return { iso, label: d.toLocaleDateString(undefined, { weekday: 'short' }).slice(0,3), hours: mins / 60 };
+  });
+  const max = Math.max(2, ...data.map(d => d.hours));
+  const el = document.getElementById('barChart');
+  el.innerHTML = data.map(d => {
+    const h = (d.hours / max) * 100;
+    const isToday = d.iso === todayIso;
+    return `
+      <div class="bar-col">
+        <div class="bar-track">
+          <div class="bar ${isToday?'today':''}" style="height:${h.toFixed(1)}%">
+            <div class="bar-value">${d.hours.toFixed(1)}h</div>
+          </div>
+        </div>
+        <div class="bar-label">${d.label}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+/* ---------- Render: donut chart ---------- */
+function renderDonut() {
+  const counts = state.meetings.reduce((acc, m) => { acc[m.type] = (acc[m.type] || 0) + 1; return acc; }, {});
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  const order = ['standup', 'review', 'client', '1on1', 'focus'];
+  const colors = {
+    standup: '#60a5fa',
+    review: '#a78bfa',
+    client: '#f472b6',
+    '1on1': '#34d399',
+    focus: '#fbbf24',
+  };
+  const labels = { standup: 'Standup', review: 'Review', client: 'Client', '1on1': '1:1', focus: 'Focus' };
+
+  const svg = document.getElementById('donut');
+  if (total === 0) {
+    svg.innerHTML = `<circle cx="50" cy="50" r="38" fill="none" stroke="rgba(148,163,184,.15)" stroke-width="10"/><text class="donut-center" x="50" y="50">0</text>`;
+    document.getElementById('donutLegend').innerHTML = '<div style="color:var(--muted);font-size:13px;">No meetings yet.</div>';
+    return;
+  }
+
+  // Build donut as stacked arcs.
+  const cx = 50, cy = 50, r = 38, circ = 2 * Math.PI * r;
+  let offset = 0;
+  let segs = '';
+  for (const type of order) {
+    const v = counts[type] || 0;
+    if (!v) continue;
+    const frac = v / total;
+    const dash = circ * frac;
+    segs += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${colors[type]}" stroke-width="12" stroke-dasharray="${dash} ${circ-dash}" stroke-dashoffset="${-offset}" transform="rotate(-90 ${cx} ${cy})"/>`;
+    offset += dash;
+  }
+  svg.innerHTML = segs +
+    `<text class="donut-center" x="50" y="48">${total}</text>` +
+    `<text class="donut-center-sub" x="50" y="62">meetings</text>`;
+
+  document.getElementById('donutLegend').innerHTML = order.filter(t => counts[t]).map(t => {
+    const v = counts[t];
+    const pct = ((v/total)*100).toFixed(0);
+    return `
+      <div class="legend-row">
+        <span class="legend-swatch" style="background:${colors[t]}"></span>
+        <span class="legend-name">${labels[t]}</span>
+        <span class="legend-value">${v} · ${pct}%</span>
+      </div>
+    `;
+  }).join('');
+}
+
+/* ---------- Render: participants ---------- */
+function renderParticipants() {
+  // Aggregate hours per non-self participant across last 7 days + future 7 days
+  const today = new Date();
+  const range = [...Array(14)].map((_, i) => MH.iso(MH.addDays(today, i - 7)));
+  const hours = {};
+  state.meetings.filter(m => range.includes(m.date)).forEach(m => {
+    const dur = MH.duration(m.start, m.end) / 60;
+    m.participants.forEach(p => {
+      if (p === 'You') return;
+      hours[p] = (hours[p] || 0) + dur;
+    });
+  });
+  const sorted = Object.entries(hours).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  document.getElementById('participantsCount').textContent = sorted.length;
+  const el = document.getElementById('participants');
+  if (sorted.length === 0) {
+    el.innerHTML = `<div class="empty" style="grid-column:1/-1"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="7" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/></svg></div><h4>No participants yet</h4><p>Add people to a meeting to see them here.</p></div>`;
+    return;
+  }
+  // Fake role labels for spice
+  const roles = ['Engineering', 'Design', 'Product', 'Sales', 'Marketing', 'Operations'];
+  el.innerHTML = sorted.map(([name, h], i) => `
+    <div class="participant-row">
+      <div class="av-lg">${MH.initials(name)}</div>
+      <div class="info">
+        <div class="name">${MH.escapeHtml(name)}</div>
+        <div class="role">${roles[i % roles.length]}</div>
+      </div>
+      <div class="hours">${h.toFixed(1)}<span class="unit">h</span></div>
+    </div>
+  `).join('');
+}
+
+/* ---------- Render: recordings ---------- */
+function renderRecordings() {
+  const el = document.getElementById('recordings');
+  if (!state.recordings.length) {
+    el.innerHTML = `<div class="empty"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg></div><h4>No recordings</h4><p>Recordings will appear here.</p></div>`;
+    return;
+  }
+  el.innerHTML = state.recordings.map(r => `
+    <div class="rec-row" data-id="${r.id}">
+      <div class="rec-thumb"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg></div>
+      <div class="rec-info">
+        <div class="rec-title">${MH.escapeHtml(r.title)}</div>
+        <div class="rec-meta">${new Date(r.date+'T00:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric'})} · ${r.duration}</div>
+      </div>
+      <div class="rec-duration">${r.duration}</div>
+    </div>
+  `).join('');
+}
+
+/* ---------- Render all ---------- */
+function renderAll() {
+  renderHero();
+  renderClock();
+  renderKpis();
+  renderTimeline();
+  renderCalendar();
+  renderActions();
+  renderBarChart();
+  renderDonut();
+  renderParticipants();
+  renderRecordings();
+}
+
+/* ---------- Modal ---------- */
+function openModal(meeting) {
+  editingId = meeting?.id ?? null;
+  document.getElementById('modalTitle').textContent = meeting ? 'Edit meeting' : 'New meeting';
+  document.getElementById('fId').value = meeting?.id ?? '';
+  document.getElementById('fTitle').value = meeting?.title ?? '';
+  document.getElementById('fDate').value = meeting?.date ?? MH.iso(new Date());
+  document.getElementById('fStart').value = meeting?.start ?? '10:00';
+  document.getElementById('fEnd').value = meeting?.end ?? '10:30';
+  document.getElementById('fType').value = meeting?.type ?? 'review';
+  document.getElementById('fPeople').value = meeting?.participants?.join(', ') ?? 'You';
+  document.getElementById('fLocation').value = meeting?.location ?? '';
+  document.getElementById('fNotes').value = meeting?.notes ?? '';
+  document.getElementById('meetingModal').classList.add('open');
+  setTimeout(() => document.getElementById('fTitle').focus(), 80);
+}
+function closeModal() {
+  document.getElementById('meetingModal').classList.remove('open');
+  editingId = null;
+}
+
+document.getElementById('btnNewMeeting').addEventListener('click', () => openModal(null));
+document.getElementById('btnCancelModal').addEventListener('click', closeModal);
+document.getElementById('meetingModal').addEventListener('click', (e) => {
+  if (e.target.id === 'meetingModal') closeModal();
+});
+document.getElementById('meetingForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const data = Object.fromEntries(fd);
+  const participants = (data.participants || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (!participants.length) participants.push('You');
+  if (MH.parseTime(data.start) >= MH.parseTime(data.end)) {
+    toast('End must be after start', 'warn'); return;
+  }
+  const meeting = {
+    id: data.id || MH.uid(),
+    title: data.title.trim(),
+    date: data.date,
+    start: data.start,
+    end: data.end,
+    type: data.type,
+    participants,
+    location: data.location.trim(),
+    notes: data.notes.trim(),
+  };
+  if (editingId) {
+    state.meetings = state.meetings.map(m => m.id === editingId ? meeting : m);
+    toast('Meeting updated');
+  } else {
+    state.meetings.push(meeting);
+    toast('Meeting added');
+  }
+  MH.save(state);
+  closeModal();
+  renderAll();
+});
+
+/* ---------- Detail panel ---------- */
+function openPanel(meeting) {
+  const panel = document.getElementById('detailPanel');
+  const overlay = document.getElementById('panelOverlay');
+  document.getElementById('panelTitle').textContent = meeting.title;
+  const dateLabel = new Date(meeting.date+'T00:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  const dur = MH.duration(meeting.start, meeting.end);
+  document.getElementById('panelBody').innerHTML = `
+    <div class="panel-section">
+      <div class="type-pill type-${meeting.type}" style="display:inline-block;">${meeting.type}</div>
+    </div>
+    <div class="panel-section">
+      <div class="panel-section-label">Details</div>
+      <div class="panel-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg><span class="label">When</span><span>${dateLabel}, ${MH.fmtTime(meeting.start)} → ${MH.fmtTime(meeting.end)} (${dur}m)</span></div>
+      <div class="panel-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg><span class="label">Where</span><span>${MH.escapeHtml(meeting.location || '—')}</span></div>
+      <div class="panel-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="7" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/></svg><span class="label">People</span><span>${meeting.participants.map(p => MH.escapeHtml(p)).join(', ')}</span></div>
+    </div>
+    <div class="panel-section">
+      <div class="panel-section-label">Notes</div>
+      <div class="panel-notes" contenteditable="true" data-id="${meeting.id}" id="panelNotes">${MH.escapeHtml(meeting.notes || '')}</div>
+    </div>
+    <div class="panel-actions">
+      <button class="btn-primary" data-action="edit-meeting" data-id="${meeting.id}">Edit</button>
+      <button class="btn-ghost" data-action="duplicate-meeting" data-id="${meeting.id}">Duplicate</button>
+      <button class="btn-danger" data-action="delete-meeting" data-id="${meeting.id}" style="margin-left:auto;">Delete</button>
+    </div>
+  `;
+
+  // Save notes on blur
+  document.getElementById('panelNotes').addEventListener('blur', (e) => {
+    const id = e.target.dataset.id;
+    const text = e.target.innerText;
+    state.meetings = state.meetings.map(m => m.id === id ? { ...m, notes: text } : m);
+    MH.save(state);
+    toast('Notes saved');
+  });
+
+  panel.classList.add('open');
+  overlay.classList.add('open');
+}
+function closePanel() {
+  document.getElementById('detailPanel').classList.remove('open');
+  document.getElementById('panelOverlay').classList.remove('open');
+}
+document.getElementById('panelOverlay').addEventListener('click', closePanel);
+document.getElementById('btnClosePanel').addEventListener('click', closePanel);
+
+/* ---------- Event delegation ---------- */
+document.addEventListener('click', (e) => {
+  // tabs
+  const tab = e.target.closest('[data-tab]');
+  if (tab) {
+    document.querySelectorAll('[data-tab]').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    timelineMode = tab.dataset.tab;
+    renderTimeline();
+    return;
+  }
+
+  // calendar day
+  const day = e.target.closest('.cal-day');
+  if (day) {
+    selectedDate = day.dataset.date;
+    renderCalendar();
+    // jump timeline to that day if same week
+    return;
+  }
+
+  // calendar nav
+  if (e.target.closest('#calPrev')) { viewDate.setMonth(viewDate.getMonth()-1); renderCalendar(); return; }
+  if (e.target.closest('#calNext')) { viewDate.setMonth(viewDate.getMonth()+1); renderCalendar(); return; }
+  if (e.target.closest('#calToday')) { viewDate = new Date(); selectedDate = MH.iso(new Date()); renderCalendar(); return; }
+
+  // action toggle
+  const toggle = e.target.closest('[data-action="toggle-action"]');
+  if (toggle) {
+    const id = toggle.dataset.id;
+    state.actionItems = state.actionItems.map(a => a.id === id ? { ...a, done: !a.done } : a);
+    MH.save(state);
+    renderActions();
+    renderKpis();
+    return;
+  }
+
+  // join (placeholder)
+  const join = e.target.closest('[data-action="join"]');
+  if (join) {
+    e.stopPropagation();
+    const id = join.dataset.id;
+    const m = state.meetings.find(x => x.id === id);
+    if (!m) return;
+    toast(`Joining ${m.title}…`);
+    return;
+  }
+
+  // meeting card click → panel
+  const mt = e.target.closest('.meeting');
+  if (mt) {
+    const id = mt.dataset.id;
+    const m = state.meetings.find(x => x.id === id);
+    if (m) openPanel(m);
+    return;
+  }
+
+  // edit / duplicate / delete from panel
+  const edit = e.target.closest('[data-action="edit-meeting"]');
+  if (edit) {
+    const m = state.meetings.find(x => x.id === edit.dataset.id);
+    if (m) { closePanel(); openModal(m); }
+    return;
+  }
+  const dup = e.target.closest('[data-action="duplicate-meeting"]');
+  if (dup) {
+    const m = state.meetings.find(x => x.id === dup.dataset.id);
+    if (m) {
+      const copy = { ...m, id: MH.uid(), title: m.title + ' (copy)' };
+      state.meetings.push(copy);
+      MH.save(state); renderAll(); closePanel(); toast('Meeting duplicated');
+    }
+    return;
+  }
+  const del = e.target.closest('[data-action="delete-meeting"]');
+  if (del) {
+    if (!confirm('Delete this meeting? This cannot be undone.')) return;
+    state.meetings = state.meetings.filter(m => m.id !== del.dataset.id);
+    MH.save(state); renderAll(); closePanel(); toast('Meeting deleted');
+    return;
+  }
+
+  // recording placeholder
+  const rec = e.target.closest('.rec-row');
+  if (rec) { toast('Recording opens in player (demo)'); return; }
+});
+
+/* ---------- Add action item ---------- */
+document.getElementById('btnAddAction').addEventListener('click', () => {
+  const text = prompt('What needs to get done?');
+  if (!text || !text.trim()) return;
+  state.actionItems.push({
+    id: MH.uid(),
+    text: text.trim(),
+    from: 'manual',
+    due: MH.iso(new Date()),
+    done: false,
+  });
+  MH.save(state);
+  renderActions(); renderKpis();
+  toast('Action item added');
+});
+
+/* ---------- Shortcuts modal ---------- */
+document.getElementById('btnShortcuts').addEventListener('click', () => {
+  document.getElementById('shortcutsModal').classList.add('open');
+});
+document.getElementById('btnCloseShortcuts').addEventListener('click', () => {
+  document.getElementById('shortcutsModal').classList.remove('open');
+});
+document.getElementById('shortcutsModal').addEventListener('click', (e) => {
+  if (e.target.id === 'shortcutsModal') e.target.classList.remove('open');
+});
+
+/* ---------- Command palette ---------- */
+function openCmdk() {
+  const o = document.getElementById('cmdkOverlay');
+  o.classList.add('open');
+  const input = document.getElementById('cmdkInput');
+  input.value = '';
+  renderCmdk('');
+  setTimeout(() => input.focus(), 50);
+}
+function closeCmdk() { document.getElementById('cmdkOverlay').classList.remove('open'); }
+function renderCmdk(q) {
+  q = q.toLowerCase().trim();
+  const commands = [
+    { id: 'cmd:new', title: 'New meeting', hint: 'N', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>', run: () => openModal(null) },
+    { id: 'cmd:action', title: 'Add action item', hint: 'A', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 11 3 3L22 4"/></svg>', run: () => document.getElementById('btnAddAction').click() },
+    { id: 'cmd:today', title: 'Go to today', hint: 'T', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>', run: () => { viewDate = new Date(); selectedDate = MH.iso(new Date()); renderCalendar(); window.scrollTo({top:0,behavior:'smooth'}); } },
+    { id: 'cmd:reset', title: 'Reset demo data', hint: '', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>', run: () => { if (confirm('Reset to demo data?')) { state = seedData(); MH.save(state); renderAll(); toast('Reset to demo'); } } },
+    { id: 'cmd:shortcuts', title: 'Show keyboard shortcuts', hint: '?', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/></svg>', run: () => document.getElementById('btnShortcuts').click() },
+  ];
+  const meetings = state.meetings
+    .filter(m => !q || m.title.toLowerCase().includes(q) || m.participants.join(' ').toLowerCase().includes(q))
+    .slice(0, 6);
+  const filteredCmds = commands.filter(c => !q || c.title.toLowerCase().includes(q));
+
+  let html = '';
+  if (filteredCmds.length) {
+    html += '<div class="cmdk-group-title">Commands</div>';
+    html += filteredCmds.map((c, i) => `
+      <div class="cmdk-item ${i===0 ? 'active':''}" data-cmd="${c.id}">
+        <div class="ico">${c.icon}</div>
+        <div class="text">${MH.escapeHtml(c.title)}</div>
+        ${c.hint ? `<span class="hint kbd">${c.hint}</span>` : ''}
+      </div>
+    `).join('');
+  }
+  if (meetings.length) {
+    html += '<div class="cmdk-group-title">Meetings</div>';
+    html += meetings.map(m => `
+      <div class="cmdk-item" data-mid="${m.id}">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/></svg></div>
+        <div class="text">${MH.escapeHtml(m.title)} <span class="hint" style="margin-left:6px;">${new Date(m.date+'T00:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric'})}</span></div>
+      </div>
+    `).join('');
+  }
+  if (!html) {
+    html = '<div class="cmdk-empty">Nothing matched.</div>';
+  }
+  document.getElementById('cmdkResults').innerHTML = html;
+
+  // Save runners on window for click handling
+  document.getElementById('cmdkResults').querySelectorAll('[data-cmd]').forEach(el => {
+    el.addEventListener('click', () => {
+      const cmd = filteredCmds.find(c => c.id === el.dataset.cmd);
+      closeCmdk();
+      if (cmd) cmd.run();
+    });
+  });
+  document.getElementById('cmdkResults').querySelectorAll('[data-mid]').forEach(el => {
+    el.addEventListener('click', () => {
+      const m = state.meetings.find(x => x.id === el.dataset.mid);
+      closeCmdk();
+      if (m) openPanel(m);
+    });
+  });
+}
+document.getElementById('cmdkOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'cmdkOverlay') closeCmdk();
+});
+document.getElementById('cmdkInput').addEventListener('input', (e) => renderCmdk(e.target.value));
+document.getElementById('cmdkInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    const first = document.querySelector('#cmdkResults .cmdk-item.active') || document.querySelector('#cmdkResults .cmdk-item');
+    if (first) first.click();
+  }
+});
+
+document.getElementById('globalSearch').addEventListener('focus', (e) => { e.target.blur(); openCmdk(); });
+
+/* ---------- Keyboard ---------- */
+document.addEventListener('keydown', (e) => {
+  const inField = ['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName) || document.activeElement.isContentEditable;
+
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault(); openCmdk(); return;
+  }
+  if (e.key === 'Escape') {
+    closeCmdk(); closeModal(); closePanel();
+    document.querySelectorAll('.modal-overlay.open').forEach(m => m.classList.remove('open'));
+    return;
+  }
+  if (inField) return;
+  if (e.key === 'n' || e.key === 'N') { e.preventDefault(); openModal(null); }
+  else if (e.key === 'a' || e.key === 'A') { e.preventDefault(); document.getElementById('btnAddAction').click(); }
+  else if (e.key === 't' || e.key === 'T') {
+    viewDate = new Date(); selectedDate = MH.iso(new Date()); renderCalendar(); window.scrollTo({top:0,behavior:'smooth'});
+  }
+  else if (e.key === '?') { e.preventDefault(); document.getElementById('btnShortcuts').click(); }
+});
+
+/* ---------- Toast ---------- */
+function toast(msg, kind = 'ok') {
+  const wrap = document.getElementById('toasts');
+  const t = document.createElement('div');
+  t.className = 'toast';
+  const icon = kind === 'warn'
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2"><path d="m21.7 18-9-15.6a2 2 0 0 0-3.4 0L.3 18A2 2 0 0 0 2 21h18a2 2 0 0 0 1.7-3z"/><path d="M12 9v4M12 17h.01"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>';
+  t.innerHTML = `${icon}<span>${MH.escapeHtml(msg)}</span>`;
+  wrap.appendChild(t);
+  setTimeout(() => {
+    t.style.transition = 'opacity .3s, transform .3s';
+    t.style.opacity = '0'; t.style.transform = 'translateY(8px)';
+    setTimeout(() => t.remove(), 320);
+  }, 2400);
+}
+
+/* ---------- Init ---------- */
+renderAll();
+setInterval(() => { renderClock(); renderHero(); positionNowLine(); }, 30000);
+setInterval(() => { /* re-render timeline every 5 min to update progress */ renderTimeline(); }, 5 * 60 * 1000);
+
+// Expose for tests
+window.MH = MH;
+window.MHState = () => state;
+window.MHSeed = seedData;
+</script>
+</body>
+</html>
