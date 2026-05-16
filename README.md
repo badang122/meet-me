@@ -131,7 +131,11 @@ To wipe stored data: `localStorage.removeItem('meet:v1')` in the console.
 
 ## Tests
 
-Open `tests.html` for an in-browser unit test runner. It loads `index.html` and `dashboard.html` in hidden iframes, calls their exported helpers, and reports pass/fail. The suite covers:
+Open `tests.html` for an in-browser unit test runner. By default it tests the Meet app only — the dashboard is encrypted on the public site, so its helpers aren't reachable from the iframe and those tests are marked as skipped.
+
+For a full local run (including dashboard tests), keep your plain `dashboard-source.html` and load: `tests.html?source=1`.
+
+The suite covers:
 
 - Meeting code format (`aaa-bbbb-ccc`, uniqueness)
 - Initials extraction (single name, two parts, three parts, null safe)
@@ -144,9 +148,26 @@ Open `tests.html` for an in-browser unit test runner. It loads `index.html` and 
 
 Re-run by clicking the button or refreshing the page.
 
-## Dashboard (bonus)
+## Dashboard (bonus) — password-gated
 
-`dashboard.html` is a meeting **calendar + analytics dashboard**, separate from the call experience:
+`dashboard.html` is **encrypted** with AES-GCM 256-bit and gated behind a password. The encryption is performed offline by `encrypt-dashboard.js`; what ships in the repo is the gate page + base64 ciphertext blob.
+
+- **Algorithm:** PBKDF2-SHA256 (100,000 iterations) → AES-GCM 256-bit
+- **Public view source:** only ciphertext + the gate's UI code — no dashboard internals leak
+- **Wrong password:** AES-GCM auth tag fails; gate shows error and re-prompts
+- **Correct password:** decrypts in the browser via `crypto.subtle`, replaces document with the decrypted HTML (scripts re-execute via `document.write`)
+
+To re-encrypt with a different password (or after editing the source dashboard):
+
+```bash
+# Edit dashboard-source.html (plain HTML — gitignored, keep it local).
+node encrypt-dashboard.js dashboard-source.html dashboard.html '<new-password>'
+git add dashboard.html
+git commit -m "Re-encrypt dashboard"
+git push
+```
+
+The dashboard itself is unchanged once unlocked:
 
 - 4 KPI cards with sparklines (today's meetings, weekly hours, on-time %, open action items)
 - Today's timeline with live "NOW" indicator

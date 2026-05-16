@@ -3,3 +3,6 @@
 node_modules/
 .DS_Store
 Thumbs.db
+
+# Plaintext dashboard source — DO NOT COMMIT (encrypted dashboard.html is in repo)
+dashboard-source.html
